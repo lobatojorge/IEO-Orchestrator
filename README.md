@@ -1,4 +1,4 @@
-# IEO Orchestrator — Pipeline y Visualización de Series Temporales Oceanográficas
+# IEO Orchestrator
 
 > **Trabajo de Fin de Máster** | Pipeline de datos y plataforma web interactiva para el análisis de radiales oceanográficos del IEO (Instituto Español de Oceanografía).
 
@@ -9,6 +9,8 @@
 Diseña e implementa un **pipeline integral de datos** (ingesta, validación de calidad, análisis estadístico) y una **plataforma web interactiva** (Streamlit) para explorar series temporales históricas de muestreos marinos.
 
 La arquitectura prioriza **automatización**, **reproducibilidad**, **control de calidad riguroso del dato** y su accesibilidad a través de visualizaciones interactivas.
+
+En la rama **`deep-learning`** se añade experimentación con **modelos foundation** para series temporales: el script `src/timegpt.py` llama a **TimeGPT** (Nixtla) para **detección de anomalías zero-shot** sobre temperatura CTD ya procesada (ver sección más abajo).
 
 ---
 
@@ -29,6 +31,7 @@ IEO-Orchestrator/
 │   ├── 02_analysis.py         Cálculos, estadística y modelado
 │   ├── 03_visualization.py    Gráficos Plotly y utilidades de visualización
 │   ├── visualization.py       Fachada de importación para `run/app.py`
+│   ├── timegpt.py             TimeGPT (Nixtla): anomalías zero-shot en series CTD — rama deep-learning
 │   └── fig_export.py          Exportación de figuras a PNG
 ├── outputs/                   ← Productos generados por los scripts
 │   ├── figures/               Gráficos generados (PNG)
@@ -107,6 +110,29 @@ En Windows puedes usar `run/lanzador.bat` para arrancar directamente.
 
 ---
 
+## 🤖 TimeGPT — detección de anomalías (rama `deep-learning`)
+
+El archivo **`src/timegpt.py`** prepara los datos en el formato que exige TimeGPT (`ds`, `y`, `unique_id`), invoca `NixtlaClient.detect_anomalies()` con nivel de confianza **95 %** e imprime por consola las **primeras 10** filas marcadas como anomalía.
+
+| Elemento | Detalle |
+|----------|---------|
+| **Entrada** | `data/processed/sireno_gijon_ctd_processed.csv` (debe existir tras la ingesta / pipeline) |
+| **Series** | Una serie por **estación** (`unique_id`); fechas en **`ds`**, temperatura en **`y`**; agregación **diaria** (media si hay varias mediciones el mismo día) |
+| **Credencial** | API key de Nixtla: variable de entorno **`NIXTLA_API_KEY`** (recomendado). En el script hay una línea comentada para pruebas locales **sin** subir secretos al repo |
+| **Dependencias** | `pip install nixtla pandas` (en la raíz del repo también hay `requirements.txt` con `nixtla`) |
+
+**Ejecución** (desde la raíz del proyecto):
+
+```bash
+# Windows PowerShell
+$env:NIXTLA_API_KEY = "tu_clave"
+python src/timegpt.py
+```
+
+Para comparar enfoques estadísticos clásicos frente a modelos foundation, consulta `docs/experimentacion_anomalias/README.md`.
+
+---
+
 ## 🛠️ Stack Tecnológico
 
 | Capa | Tecnologías |
@@ -116,6 +142,7 @@ En Windows puedes usar `run/lanzador.bat` para arrancar directamente.
 | Series temporales (módulo 02) | **statsmodels** (SARIMAX); instalar con `pip install -r requirements.txt` |
 | Visualización | Plotly (app), Seaborn/Matplotlib (scripts) |
 | Plataforma web | Streamlit |
+| Anomalías zero-shot (rama *deep-learning*) | **nixtla** (TimeGPT vía `NixtlaClient`) |
 
 ---
 
