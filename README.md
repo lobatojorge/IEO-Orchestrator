@@ -1,14 +1,9 @@
 # IEO Orchestrator — Pipeline y Visualización de Series Temporales Oceanográficas
 
-> **Trabajo de Fin de Máster** | Pipeline de datos y plataforma web interactiva para el análisis de radiales oceanográficos del IEO (Instituto Español de Oceanografía).
-
----
 
 ## ¿Qué hace este proyecto?
 
-Diseña e implementa un **pipeline integral de datos** (ingesta, validación de calidad, análisis estadístico) y una **plataforma web interactiva** (Streamlit) para explorar series temporales históricas de muestreos marinos.
-
-La arquitectura prioriza **automatización**, **reproducibilidad**, **control de calidad riguroso del dato** y su accesibilidad a través de visualizaciones interactivas.
+Este primer boceto del MVP trabaja sobre archivos.xsl. Tras entender que el CTD genera archivos propios, pensé que sería buena idea trabajar sobre ellos y, de esta forma, minimizar el sesgo humano
 
 ---
 
@@ -46,77 +41,3 @@ IEO-Orchestrator/
 │   └── README.md              Guía rápida de uso de `run/`
 └── README.md
 ```
-
-> [!IMPORTANT]
-> **Las carpetas `data/` y `outputs/` están vacías** (solo contienen un `.gitkeep`).
-> Para iniciar el pipeline, coloca el archivo de datos brutos (`ExcelSirenoGijon.xls` o equivalente) en `data/raw/` y ejecuta `python main.py`.
-
----
-
-## ⚙️ Flujo de Trabajo
-
-```
-data/raw/  →  00_data_scout.py  →  00_ingestion.py  →  01_agent_inspector.py
-                                                              ↓
-                                         data/processed/  +  data/quarantine/
-                                                              ↓
-                                                         app.py (Streamlit)
-```
-
-1. **Reconocimiento** (`00_data_scout.py`): genera un reporte de la estructura del raw antes de procesar nada.
-2. **Ingesta** (`00_ingestion.py`): estandariza formatos irregulares y produce un CSV tabular limpio.
-3. **Inspección** (`01_agent_inspector.py`): audita la calidad física/biológica del dato; los registros anómalos van a `quarantine/`.
-4. **Análisis y visualización** (`02_analysis.py`, `03_visualization.py`): estadísticas, tendencias y gráficos a disco.
-5. **Plataforma web** (`app.py`): interfaz Streamlit para exploración interactiva de los datos validados.
-
----
-
-## 🚀 Instalación y Arranque
-
-### 1. Entorno Python
-
-```bash
-cd run
-# Python 3.11 o 3.12 recomendado
-pip install -r requirements.txt
-```
-
-### 2. Datos
-
-Coloca el archivo de datos en `data/raw/` (el pipeline espera `ExcelSirenoGijon.xls` para Radiales Gijón).
-> ⚠️ Los datos reales del IEO **no se incluyen** en este repositorio.
-
-### 3. Ejecutar el pipeline
-
-```bash
-cd run
-python main.py
-```
-
-### 4. Lanzar la plataforma web
-
-```bash
-cd run
-streamlit run app.py
-```
-
-En Windows puedes usar `run/lanzador.bat` para arrancar directamente.
-
----
-
-## 🛠️ Stack Tecnológico
-
-| Capa | Tecnologías |
-|---|---|
-| Orquestación e ingesta | Python, Pandas, Pathlib |
-| Calidad de datos | Great Expectations |
-| Visualización estática | Plotly, Seaborn, Matplotlib |
-| Plataforma web | Streamlit |
-
----
-
-## 📁 Notas
-
-- Los textos metodológicos se editan en `docs/metodologia_*.md` y la web los carga automáticamente.
-- `src/archive/` contiene módulos en desarrollo no activos en el pipeline principal. No se incluye en el repositorio.
-- La carpeta `auditoria_advicExplorer/` (análisis de la aplicación R Shiny adviceXplorer del ICES) se mantiene localmente y no forma parte de este repositorio.
