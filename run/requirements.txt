@@ -2,12 +2,13 @@ Markdown
 matplotlib
 numpy
 pandas
+polars
 plotly
 PyYAML
-scikit_learn
+python-calamine
+scikit-learn
 scipy
 seaborn
 statsmodels
 streamlit
-xlrd
 

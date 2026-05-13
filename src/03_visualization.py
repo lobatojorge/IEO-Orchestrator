@@ -12,8 +12,15 @@ Funciones principales
 - plot_hovmoller(...): mapa de calor profundidad vs año.
 """
 
+"""
+DEPRECADO (temporalmente)
+------------------------
+Este módulo depende de Pandas. El pipeline de producción ya no lo incluye.
+Se migrará en una fase específica de UI/visualización a Polars + Plotly sin Pandas.
+"""
+
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -1909,6 +1916,282 @@ def plot_hovmoller_termoclina(
         yaxis=dict(title="Profundidad (m)", autorange="reversed"),
         height=500,
     )
+    return fig
+
+
+def plot_marcos_atac_panels(
+    df: pd.DataFrame,
+    *,
+    station_label: str,
+    slope_per_year: float,
+    p_value: float,
+    ar_order: float | int | None = None,
+) -> go.Figure:
+    """
+    Tres paneles: (1) temperatura observada + ajuste Marcos + pronóstico ATAC;
+    (2) residuos de Marcos con bandas ATAC; (3) tendencia lineal extraída por Marcos.
+    """
+    work = df.copy()
+    work["fecha"] = pd.to_datetime(work["fecha"], errors="coerce")
+    work = work.sort_values("fecha")
+
+    fig = make_subplots(
+        rows=3,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.08,
+        subplot_titles=(
+            "Temperatura a 5 m: observación, modelo Marcos y pronóstico ATAC (residuos)",
+            "Residuos de Marcos y proceso autorregresivo (ATAC)",
+            "Tendencia lineal (Marcos): pendiente anual",
+        ),
+    )
+
+    x_hist = work.loc[work["observation"].notna(), "fecha"]
+    y_hist = work.loc[work["observation"].notna(), "observation"]
+
+    # Panel 1 — observación
+    fig.add_trace(
+        go.Scatter(
+            x=x_hist,
+            y=y_hist,
+            mode="markers",
+            name="Observado",
+            marker=dict(color="#104E8B", size=7),
+            hovertemplate="%{x|%b %Y}<br>T: %{y:.2f} °C<extra></extra>",
+        ),
+        row=1,
+        col=1,
+    )
+
+    # Panel 1 — tendencia y ajuste histórico
+    fig.add_trace(
+        go.Scatter(
+            x=work["fecha"],
+            y=work["trend"],
+            mode="lines",
+            name="Tendencia (Marcos)",
+            line=dict(color="#FFB302", width=2),
+            hovertemplate="%{x|%b %Y}<br>Tendencia: %{y:.2f} °C<extra></extra>",
+        ),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=work["fecha"],
+            y=work["fitted"],
+            mode="lines",
+            name="Ajuste (tend. + estacionalidad)",
+            line=dict(color="#104E8B", width=1.2, dash="dash"),
+            hovertemplate="%{x|%b %Y}<br>Ajuste: %{y:.2f} °C<extra></extra>",
+        ),
+        row=1,
+        col=1,
+    )
+
+    # Panel 1 — banda de incertidumbre histórica (95 %) sobre la temperatura
+    if "temp_pred_lo_95" in work.columns and "temp_pred_hi_95" in work.columns:
+        ok = work["observation"].notna()
+        fig.add_trace(
+            go.Scatter(
+                x=work.loc[ok, "fecha"],
+                y=work.loc[ok, "temp_pred_hi_95"],
+                mode="lines",
+                line=dict(width=0),
+                showlegend=False,
+                hoverinfo="skip",
+            ),
+            row=1,
+            col=1,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=work.loc[ok, "fecha"],
+                y=work.loc[ok, "temp_pred_lo_95"],
+                mode="lines",
+                line=dict(width=0),
+                fillcolor="rgba(120,120,120,0.2)",
+                fill="tonexty",
+                name="Banda pred. 95 % (temp.)",
+                hoverinfo="skip",
+            ),
+            row=1,
+            col=1,
+        )
+
+    # Panel 1 — futuro: bandas anidadas 95 / 75 / 50 %
+    fut = work["observation"].isna()
+    if fut.any() and "temp_fc_mean" in work.columns:
+        wf = work.loc[fut].copy()
+        for lab, alpha_fill in [("95", 0.35), ("75", 0.25), ("50", 0.15)]:
+            lo_c = f"temp_fc_lo_{lab}"
+            hi_c = f"temp_fc_hi_{lab}"
+            if lo_c not in wf.columns or hi_c not in wf.columns:
+                continue
+            fig.add_trace(
+                go.Scatter(
+                    x=wf["fecha"],
+                    y=wf[hi_c],
+                    mode="lines",
+                    line=dict(width=0),
+                    showlegend=False,
+                    hoverinfo="skip",
+                ),
+                row=1,
+                col=1,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=wf["fecha"],
+                    y=wf[lo_c],
+                    mode="lines",
+                    line=dict(width=0),
+                    fillcolor=f"rgba(139,26,26,{alpha_fill})",
+                    fill="tonexty",
+                    name=f"Pronóstico banda {lab} %",
+                    hoverinfo="skip",
+                ),
+                row=1,
+                col=1,
+            )
+        fig.add_trace(
+            go.Scatter(
+                x=wf["fecha"],
+                y=wf["temp_fc_mean"],
+                mode="lines",
+                name="Pronóstico temperatura",
+                line=dict(color="#8B1A1A", width=1.5, dash="dash"),
+                hovertemplate="%{x|%b %Y}<br>Media: %{y:.2f} °C<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
+
+    # Panel 2 — residuo
+    okr = work["observation"].notna()
+    fig.add_trace(
+        go.Scatter(
+            x=work.loc[okr, "fecha"],
+            y=work.loc[okr, "residual"],
+            mode="lines+markers",
+            name="Residuo",
+            line=dict(color="#333333", width=1),
+            marker=dict(size=5, color="#333333"),
+            hovertemplate="%{x|%b %Y}<br>Residuo: %{y:.3f} °C<extra></extra>",
+        ),
+        row=2,
+        col=1,
+    )
+    fig.add_hline(y=0, line_dash="dot", line_color="gray", row=2, col=1)
+
+    if "resid_pred_lo_95" in work.columns and "resid_pred_hi_95" in work.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=work.loc[okr, "fecha"],
+                y=work.loc[okr, "resid_pred_hi_95"],
+                mode="lines",
+                line=dict(width=0),
+                showlegend=False,
+                hoverinfo="skip",
+            ),
+            row=2,
+            col=1,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=work.loc[okr, "fecha"],
+                y=work.loc[okr, "resid_pred_lo_95"],
+                mode="lines",
+                line=dict(width=0),
+                fillcolor="rgba(120,120,120,0.25)",
+                fill="tonexty",
+                name="Residuo: banda pred. 95 %",
+                hoverinfo="skip",
+            ),
+            row=2,
+            col=1,
+        )
+
+    if fut.any() and "resid_fc_mean" in work.columns:
+        wf2 = work.loc[fut].copy()
+        for lab, alpha_fill in [("95", 0.35), ("75", 0.25), ("50", 0.15)]:
+            lo_c = f"resid_fc_lo_{lab}"
+            hi_c = f"resid_fc_hi_{lab}"
+            if lo_c not in wf2.columns or hi_c not in wf2.columns:
+                continue
+            fig.add_trace(
+                go.Scatter(
+                    x=wf2["fecha"],
+                    y=wf2[hi_c],
+                    mode="lines",
+                    line=dict(width=0),
+                    showlegend=False,
+                    hoverinfo="skip",
+                ),
+                row=2,
+                col=1,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=wf2["fecha"],
+                    y=wf2[lo_c],
+                    mode="lines",
+                    line=dict(width=0),
+                    fillcolor=f"rgba(139,26,26,{alpha_fill})",
+                    fill="tonexty",
+                    name=f"Residuo futuro {lab} %",
+                    hoverinfo="skip",
+                ),
+                row=2,
+                col=1,
+            )
+        fig.add_trace(
+            go.Scatter(
+                x=wf2["fecha"],
+                y=wf2["resid_fc_mean"],
+                mode="lines",
+                name="Pronóstico residuo",
+                line=dict(color="#8B1A1A", width=1.2, dash="dash"),
+                hovertemplate="%{x|%b %Y}<br>Residuo esp.: %{y:.3f} °C<extra></extra>",
+            ),
+            row=2,
+            col=1,
+        )
+
+    # Panel 3 — solo tendencia
+    fig.add_trace(
+        go.Scatter(
+            x=work["fecha"],
+            y=work["trend"],
+            mode="lines",
+            name="Tendencia",
+            line=dict(color="#FFB302", width=2.5),
+            showlegend=False,
+            hovertemplate="%{x|%b %Y}<br>Tendencia: %{y:.2f} °C<extra></extra>",
+        ),
+        row=3,
+        col=1,
+    )
+
+    ar_txt = "—" if ar_order is None or (isinstance(ar_order, float) and np.isnan(ar_order)) else str(int(ar_order))
+    slope_txt = f"{slope_per_year:+.4f}" if np.isfinite(slope_per_year) else "n/d"
+    p_txt = f"{p_value:.4g}" if np.isfinite(p_value) else "n/d"
+    title_extra = f"Estación {station_label} · pendiente={slope_txt} °C/año · p={p_txt} · AR seleccionado={ar_txt}"
+
+    fig.update_layout(
+        template="simple_white",
+        height=920,
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        title=dict(text=title_extra, font=dict(size=13)),
+        margin=dict(t=80),
+    )
+    fig.update_yaxes(title_text="Temperatura (°C)", row=1, col=1)
+    fig.update_yaxes(title_text="Residuo (°C)", row=2, col=1)
+    fig.update_yaxes(title_text="Tendencia (°C)", row=3, col=1)
+    fig.update_xaxes(title_text="Fecha", row=3, col=1)
+
     return fig
 
 

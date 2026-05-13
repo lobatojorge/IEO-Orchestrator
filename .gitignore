@@ -10,6 +10,7 @@ run/__pycache__/
 *.pyo
 *.pyd
 .Python
+references/
 
 # Streamlit cache local
 .streamlit/
@@ -18,6 +19,7 @@ run/__pycache__/
 # Datos reales IEO y artefactos derivados
 # ─────────────────────────────────────────────
 data/raw/*
+data/cnv/*
 data/interim/*
 data/processed/*
 data/quarantine/*
@@ -29,6 +31,8 @@ data/pending_review/*
 # ─────────────────────────────────────────────
 outputs/figures/*
 outputs/reports/*
+outputs/runs/*
+outputs/tables/*
 !outputs/**/.gitkeep
 
 # ─────────────────────────────────────────────

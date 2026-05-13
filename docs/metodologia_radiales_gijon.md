@@ -1,14 +1,17 @@
-El programa **Radiales** es una red estratégica de monitorización ecosistémica mediante series temporales. En el IEO Gijón, el diseño espacial se articula en torno a **tres estaciones oceanográficas fijas** dispuestas en una transecta perpendicular a la costa:
+El proyecto [**RADIALES**](https://www.seriestemporales-ieo.net/) (series temporales del IEO en el norte de España) muestrea de forma **mensual** cinco transectos costeros (Vigo, A Coruña, Cudillero, **Gijón**, Santander) con observaciones multidisciplinares; los resultados se integran en **SIRENO** siguiendo protocolos comunes. En cada transecto hay estaciones de referencia costera y de plataforma, ampliadas según la batimetría local.
 
-* **Estación 1** (Coordenadas: xxx xxx): Representa la zona nerítica costera somera.
-* **Estación 2** (Coordenadas: xxx xxx): Ubicada en la plataforma continental media.
-* **Estación 3** (Coordenadas: xxx xxx): Posicionada en el límite del talud continental (mar abierto).
+En **Gijón** el transecto dispone de **cuatro** puntos fijos en línea (aguas someras → talud):
 
-Este gradiente espacial permite registrar la variabilidad hidrológica y biogeoquímica de distintas masas de agua, con el objetivo de detectar anomalías climáticas y cambios fenológicos en el ecosistema pelágico del mar Cantábrico.
+* **Estación 1 · Costa** (~50 m).
+* **Estación 2 · Plataforma** (~150 m).
+* **Estación 3 · Talud** (~500 m).
+* **Estación 4 · Talud profundo** (talud exterior).
 
-### Instrumental y Perfilado de la Columna de Agua
+Las coordenadas WGS84 para el mapa del visor están solo en metadatos al final de este archivo (no visibles en el texto); el visor las lee desde ahí.
 
-Para caracterizar la estructura térmica y salina del océano, el buque oceanográfico despliega un carrusel o **Roseta Oceanográfica** equipada con los siguientes instrumentos:
+### Instrumental (CTD)
 
-* **Sonda CTD (Conductivity, Temperature, Depth):** Un sensor electrónico que realiza un perfilado vertical continuo. Mide la conductividad (salinidad), la temperatura y la presión (profundidad) a alta resolución, lo que permite identificar fronteras físicas clave como la termoclina estacional.
-* **Botellas Niskin:** Cilindros acoplados a la roseta que se cierran telemáticamente a profundidades estándar durante el ascenso. Capturan masas de agua intactas para la calibración analítica de la salinidad y el posterior contaje biológico en laboratorio.
+Perfilado vertical con **sonda CTD** y **roseta** con botellas Niskin para calibración y muestras de laboratorio.
+
+<!-- ieo_station_coords: uso interno visor (WGS84 decimal, lon negativo = O). -->
+<!-- E1 43.592 -5.700 | E2 43.692 -5.700 | E3 43.892 -5.700 | E4 44.092 -5.700 -->

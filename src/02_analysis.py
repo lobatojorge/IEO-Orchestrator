@@ -13,32 +13,31 @@ para ser extendida en el futuro con Foundation Models de Deep Learning
 (ej. TimeGPT, PatchTST). Actualmente utiliza un modelo estadístico tipo ARIMA
 como baseline robusto.
 """
+from __future__ import annotations
 
-import pandas as pd
-import numpy as np
-from pathlib import Path
 import logging
-from typing import Tuple, Optional, Any, Dict
-import warnings
+import sys
+from pathlib import Path
+from typing import Any, Dict, Optional
 
-# Suprimir avisos molestos de statsmodels/pandas para salida limpia en consola
-warnings.filterwarnings("ignore")
-
+import numpy as np
+import pandas as pd
 import statsmodels.api as sm
+from statsmodels.tsa.statespace.sarimax import SARIMAX
 
-# Configuración básica de logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# ==========================================
-# CONFIGURACIÓN DE HIPERPARÁMETROS
-# ==========================================
-FORECAST_HORIZON_YEARS = 5       # Años a predecir hacia el futuro
-CONFIDENCE_LEVEL = 0.05           # Alpha para intervalo del 95% (1 - 0.95 = 0.05)
-TARGET_VARIABLE = "temperatura"  # Variable principal a pronosticar
-FOURIER_K = 3                     # Nº de armónicos (K) para estacionalidad mensual continua
-AR1_FORECAST_MONTHS = 6           # Horizonte corto AR(1): 3–6 meses recomendado (WGINOR)
-# ==========================================
+FOURIER_K = 3
+FORECAST_HORIZON_YEARS = 5
+CONFIDENCE_LEVEL = 0.05
+TARGET_VARIABLE = "temperatura"
+AR1_FORECAST_MONTHS = 6
+
+ATAC_FORECAST_MONTHS = 24
+ATAC_AR_CANDIDATES: tuple[int, ...] = (0, 1, 2)
+ATAC_SHORT_SERIES_MONTHS = 60
+ATAC_FORECAST_SHORT = 12
+
 
 def monthly_bin_and_anomaly(
     df: pd.DataFrame,
@@ -97,6 +96,437 @@ def monthly_bin_and_anomaly(
     monthly["anomalia_mensual"] = monthly[col_valor] - monthly["climatologia_mes"]
 
     return monthly
+
+
+def decompose_marcos(
+    df: pd.DataFrame,
+    *,
+    col_fecha: str,
+    col_y: str,
+    n_future_months: int = 0,
+) -> tuple[pd.DataFrame, dict[str, float]]:
+    """
+    Descomposición tipo `references/marcos.R` (OLS): intercepto + efectos mensuales
+    (enero como referencia) + tendencia lineal en años.
+
+    `Trend` sigue la construcción de Marcos: el primer mes tiene índice (1)/12,
+    el segundo (2)/12, etc., medido desde el primer mes de la malla temporal.
+    """
+    work = df[[col_fecha, col_y]].copy()
+    work.columns = ["fecha", "y"]
+    work["fecha"] = pd.to_datetime(work["fecha"], errors="coerce")
+    work["y"] = pd.to_numeric(work["y"], errors="coerce")
+    work = work.dropna(subset=["fecha"])
+    if work.empty:
+        return pd.DataFrame(), {}
+
+    work["fecha_m"] = work["fecha"].dt.to_period("M").dt.to_timestamp(how="start")
+    work = (
+        work.groupby("fecha_m", as_index=False)["y"]
+        .mean()
+        .rename(columns={"fecha_m": "fecha"})
+        .sort_values("fecha")
+    )
+
+    full_hist = pd.date_range(work["fecha"].min(), work["fecha"].max(), freq="MS")
+    base = pd.DataFrame({"fecha": full_hist})
+    base = base.merge(work, on="fecha", how="left")
+    base.rename(columns={"y": "observation"}, inplace=True)
+
+    if int(n_future_months) > 0:
+        fut = pd.date_range(
+            full_hist.max() + pd.DateOffset(months=1),
+            periods=int(n_future_months),
+            freq="MS",
+        )
+        base = pd.concat(
+            [base, pd.DataFrame({"fecha": fut, "observation": np.nan})],
+            ignore_index=True,
+        )
+
+    base["t_idx"] = np.arange(len(base), dtype=float)
+    base["Trend"] = (base["t_idx"] + 1.0) / 12.0
+    base["mes"] = base["fecha"].dt.month.astype(int)
+
+    month_dums = pd.get_dummies(base["mes"], prefix="m", drop_first=True)
+    X = pd.concat([month_dums, base[["Trend"]]], axis=1)
+    X = sm.add_constant(X, has_constant="add")
+    X = X.apply(pd.to_numeric, errors="coerce").astype(np.float64)
+    mask = base["observation"].notna()
+    if int(mask.sum()) < 14:
+        return pd.DataFrame(), {}
+
+    endog = pd.to_numeric(base.loc[mask, "observation"], errors="coerce").astype(np.float64)
+    model = sm.OLS(endog, X.loc[mask]).fit()
+    fitted = model.predict(X).to_numpy(dtype=float)
+    beta_trend = float(model.params.get("Trend", np.nan))
+    trend_component = beta_trend * base["Trend"].to_numpy(dtype=float)
+    seasonal_component = fitted - trend_component
+
+    out = pd.DataFrame(
+        {
+            "fecha": base["fecha"],
+            "observation": base["observation"],
+            "trend": trend_component,
+            "seasonal": seasonal_component,
+            "fitted": fitted,
+        }
+    )
+    out["residual"] = out["observation"] - out["fitted"]
+
+    meta: dict[str, float] = {
+        "slope_per_year": beta_trend,
+        "p_value_trend": float(model.pvalues.get("Trend", np.nan)),
+        "adj_r2": float(model.rsquared_adj),
+        "r2": float(model.rsquared),
+    }
+    return out, meta
+
+
+def decompose_marcos_holdout_last_n(
+    df: pd.DataFrame,
+    *,
+    col_fecha: str,
+    col_y: str,
+    holdout_months: int = 12,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """
+    Variante operativa para ATAC:
+    - Ajusta Marcos SOLO con histórico (excluye los últimos `holdout_months`
+      meses observados).
+    - Predice (tendencia+estacionalidad) para TODO el rango mensual continuo,
+      incluyendo esos últimos meses (para compararlos contra bandas).
+    """
+    holdout_months = int(max(1, holdout_months))
+
+    work = df[[col_fecha, col_y]].copy()
+    work.columns = ["fecha", "y"]
+    work["fecha"] = pd.to_datetime(work["fecha"], errors="coerce")
+    work["y"] = pd.to_numeric(work["y"], errors="coerce")
+    work = work.dropna(subset=["fecha"])
+    if work.empty:
+        return pd.DataFrame(), {"error": "empty"}
+
+    # Serie mensual (media si hay múltiple dentro de mes).
+    # La clave debe ser columna del DataFrame: groupby(Series externa) puede no
+    # devolver "fecha" en pandas recientes (KeyError en sort_values).
+    work["fecha_m"] = work["fecha"].dt.to_period("M").dt.to_timestamp(how="start")
+    work = (
+        work.groupby("fecha_m", as_index=False)["y"]
+        .mean()
+        .rename(columns={"fecha_m": "fecha"})
+        .sort_values("fecha")
+    )
+
+    full_hist = pd.date_range(work["fecha"].min(), work["fecha"].max(), freq="MS")
+    base = pd.DataFrame({"fecha": full_hist})
+    base = base.merge(work, on="fecha", how="left")
+    base.rename(columns={"y": "observation"}, inplace=True)
+
+    obs_months = base.loc[base["observation"].notna(), "fecha"].to_list()
+    if len(obs_months) < (holdout_months + 14):
+        return pd.DataFrame(), {"error": "insufficient_observed_months", "n_obs_months": float(len(obs_months))}
+
+    cutoff = obs_months[-holdout_months]
+    train_mask = (base["fecha"] < cutoff) & base["observation"].notna()
+    if int(train_mask.sum()) < 14:
+        return pd.DataFrame(), {"error": "insufficient_train_points", "n_train": float(train_mask.sum())}
+
+    base["t_idx"] = np.arange(len(base), dtype=float)
+    base["Trend"] = (base["t_idx"] + 1.0) / 12.0
+    base["mes"] = base["fecha"].dt.month.astype(int)
+
+    month_dums = pd.get_dummies(base["mes"], prefix="m", drop_first=True)
+    X = pd.concat([month_dums, base[["Trend"]]], axis=1)
+    X = sm.add_constant(X, has_constant="add")
+    X = X.apply(pd.to_numeric, errors="coerce").astype(np.float64)
+
+    endog = pd.to_numeric(base.loc[train_mask, "observation"], errors="coerce").astype(np.float64)
+    model = sm.OLS(endog, X.loc[train_mask]).fit()
+
+    fitted_all = model.predict(X).to_numpy(dtype=float)
+    out = pd.DataFrame(
+        {
+            "fecha": base["fecha"],
+            "observation": base["observation"],
+            "fitted": fitted_all,
+        }
+    )
+    out["residual"] = out["observation"] - out["fitted"]
+    out["cutoff_holdout_start"] = pd.to_datetime(cutoff)
+    out["is_holdout"] = out["fecha"] >= pd.to_datetime(cutoff)
+
+    meta: dict[str, Any] = {
+        "cutoff_holdout_start": pd.to_datetime(cutoff),
+        "holdout_months": float(holdout_months),
+        "slope_per_year": float(model.params.get("Trend", np.nan)),
+        "p_value_trend": float(model.pvalues.get("Trend", np.nan)),
+        "adj_r2": float(model.rsquared_adj),
+        "r2": float(model.rsquared),
+        "n_train_points": float(train_mask.sum()),
+    }
+    return out, meta
+
+
+def atac_holdout_bands_on_residuals(
+    residuals: pd.Series,
+    *,
+    cutoff_holdout_start: pd.Timestamp,
+    holdout_months: int = 12,
+    ar_candidates: tuple[int, ...] = ATAC_AR_CANDIDATES,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """
+    ATAC para el caso que nos interesa:
+    - Ajusta un AR(p) sobre residuos SOLO en el tramo anterior al cutoff.
+    - Predice bandas (50/75/95) para:
+        - el tramo de entrenamiento (banda azul/“esperable”)
+        - el tramo holdout (últimos 12 meses) como “forecast” para detectar anomalía.
+
+    Nota práctica sobre huecos:
+    - Si faltan meses, interpolamos residuos a malla mensual para ajustar AR
+      (para evitar varianzas absurdas por gaps).
+    """
+    holdout_months = int(max(1, holdout_months))
+    s = residuals.copy()
+    if not isinstance(s.index, pd.DatetimeIndex):
+        s.index = pd.to_datetime(s.index, errors="coerce")
+        s = s[~s.index.isna()]
+    s = s.sort_index().astype(float)
+
+    # Solo histórico de entrenamiento
+    s_train = s[s.index < cutoff_holdout_start].dropna()
+    if len(s_train) < 20:
+        return pd.DataFrame(), {"error": "insufficient_residual_train", "n_train": float(len(s_train))}
+
+    full_idx = pd.date_range(s_train.index.min(), cutoff_holdout_start - pd.DateOffset(months=1), freq="MS")
+    y = s_train.reindex(full_idx)
+    # Interpolar huecos (solo para ajuste AR)
+    y = y.interpolate(method="linear", limit_direction="both")
+
+    best_res = None
+    best_aic = np.inf
+    best_p = 0
+    for p in ar_candidates:
+        try:
+            if p == 0:
+                mod = SARIMAX(y, order=(0, 0, 0), trend="c", enforce_stationarity=False, enforce_invertibility=False)
+            else:
+                mod = SARIMAX(y, order=(p, 0, 0), trend="n", enforce_stationarity=False, enforce_invertibility=False)
+            res = mod.fit(disp=False, maxiter=500)
+            if np.isfinite(res.aic) and float(res.aic) < best_aic:
+                best_aic = float(res.aic)
+                best_res = res
+                best_p = p
+        except Exception as ex:  # noqa: BLE001
+            logger.debug("ATAC holdout SARIMAX fallo (p=%s): %s", p, ex)
+            continue
+
+    if best_res is None:
+        return pd.DataFrame(), {"error": "fit_failed"}
+
+    pred = best_res.get_prediction(start=0, end=len(y) - 1)
+    hist = pd.DataFrame({"fecha": full_idx, "resid_mean": np.asarray(pred.predicted_mean.values, dtype=float)})
+    for alpha, lab in [(0.05, "95"), (0.25, "75"), (0.50, "50")]:
+        ci = pred.conf_int(alpha=alpha)
+        hist[f"resid_lo_{lab}"] = np.asarray(ci.iloc[:, 0].values, dtype=float)
+        hist[f"resid_hi_{lab}"] = np.asarray(ci.iloc[:, 1].values, dtype=float)
+
+    fc = best_res.get_forecast(steps=holdout_months)
+    fc_idx = pd.date_range(cutoff_holdout_start, periods=holdout_months, freq="MS")
+    fut = pd.DataFrame({"fecha": fc_idx, "resid_fc_mean": np.asarray(fc.predicted_mean.values, dtype=float)})
+    for alpha, lab in [(0.05, "95"), (0.25, "75"), (0.50, "50")]:
+        ci = fc.conf_int(alpha=alpha)
+        fut[f"resid_fc_lo_{lab}"] = np.asarray(ci.iloc[:, 0].values, dtype=float)
+        fut[f"resid_fc_hi_{lab}"] = np.asarray(ci.iloc[:, 1].values, dtype=float)
+
+    out = pd.concat([hist, fut], ignore_index=True)
+    meta = {"ar_order": int(best_p), "aic": float(best_aic)}
+    return out, meta
+
+def atac_forecast(
+    residual_hist: pd.Series,
+    *,
+    n_forecast: int,
+    ar_candidates: tuple[int, ...] = ATAC_AR_CANDIDATES,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """
+    Metodología ATAC (adaptada): modelo autorregresivo de orden 0, 1 o 2 sobre
+    los residuos de Marcos; selección por AIC; bandas de predicción/pronóstico
+    al 50 %, 75 % y 95 %.
+    """
+    s = residual_hist.copy().sort_index()
+    if not isinstance(s.index, pd.DatetimeIndex):
+        s.index = pd.to_datetime(s.index, errors="coerce")
+        s = s[~s.index.isna()]
+    s = s.astype(float)
+
+    if s.empty:
+        return pd.DataFrame(), {"ar_order": None, "error": "empty_residuals"}
+
+    full_idx = pd.date_range(s.index.min(), s.index.max(), freq="MS")
+    y = s.reindex(full_idx).astype(float)
+    n_obs = int(y.notna().sum())
+    if n_obs < 4:
+        return pd.DataFrame(), {"ar_order": None, "error": "insufficient_data", "n_obs": float(n_obs)}
+
+    eff_horizon = (
+        int(n_forecast)
+        if n_obs >= ATAC_SHORT_SERIES_MONTHS
+        else min(int(n_forecast), ATAC_FORECAST_SHORT)
+    )
+    candidates = (0,) if n_obs < ATAC_SHORT_SERIES_MONTHS else tuple(ar_candidates)
+
+    best_res = None
+    best_aic = np.inf
+    best_p = 0
+    for p in candidates:
+        try:
+            if p == 0:
+                mod = SARIMAX(
+                    y,
+                    order=(0, 0, 0),
+                    trend="c",
+                    enforce_stationarity=False,
+                    enforce_invertibility=False,
+                )
+            else:
+                mod = SARIMAX(
+                    y,
+                    order=(p, 0, 0),
+                    trend="n",
+                    enforce_stationarity=False,
+                    enforce_invertibility=False,
+                )
+            fitted_m = mod.fit(disp=False, maxiter=500)
+            if np.isfinite(fitted_m.aic) and fitted_m.aic < best_aic:
+                best_aic = float(fitted_m.aic)
+                best_res = fitted_m
+                best_p = p
+        except Exception as ex:  # noqa: BLE001
+            logger.debug("SARIMAX fallo (p=%s): %s", p, ex)
+            continue
+
+    if best_res is None:
+        return pd.DataFrame(), {"ar_order": None, "error": "fit_failed"}
+
+    pred = best_res.get_prediction(start=0, end=len(y) - 1)
+    pm = pred.predicted_mean
+    if hasattr(pm, "values"):
+        pmv = np.asarray(pm.values, dtype=float).ravel()
+    else:
+        pmv = np.asarray(pm, dtype=float).ravel()
+    if pmv.size != len(full_idx):
+        pm_s = pred.predicted_mean.reindex(full_idx)
+        pmv = np.asarray(pm_s.values, dtype=float).ravel()
+
+    hist_df = pd.DataFrame({"fecha": full_idx, "resid_pred_mean": pmv})
+
+    for alpha, lab in [(0.05, "95"), (0.25, "75"), (0.50, "50")]:
+        try:
+            ci = pred.conf_int(alpha=alpha)
+            lo = np.asarray(ci.iloc[:, 0].values, dtype=float).ravel()
+            hi = np.asarray(ci.iloc[:, 1].values, dtype=float).ravel()
+            if lo.size != len(full_idx):
+                lo_s = ci.iloc[:, 0].reindex(full_idx)
+                hi_s = ci.iloc[:, 1].reindex(full_idx)
+                lo = np.asarray(lo_s.values, dtype=float).ravel()
+                hi = np.asarray(hi_s.values, dtype=float).ravel()
+            hist_df[f"resid_pred_lo_{lab}"] = lo
+            hist_df[f"resid_pred_hi_{lab}"] = hi
+        except Exception as ex:  # noqa: BLE001
+            logger.debug("conf_int hist alpha=%s: %s", alpha, ex)
+            hist_df[f"resid_pred_lo_{lab}"] = np.nan
+            hist_df[f"resid_pred_hi_{lab}"] = np.nan
+
+    fc = best_res.get_forecast(steps=eff_horizon)
+    fc_idx = pd.date_range(full_idx[-1] + pd.DateOffset(months=1), periods=eff_horizon, freq="MS")
+    fc_mean = np.asarray(fc.predicted_mean.values, dtype=float).ravel()
+    fc_df = pd.DataFrame({"fecha": fc_idx, "resid_fc_mean": fc_mean})
+
+    for alpha, lab in [(0.05, "95"), (0.25, "75"), (0.50, "50")]:
+        try:
+            ci = fc.conf_int(alpha=alpha)
+            fc_df[f"resid_fc_lo_{lab}"] = np.asarray(ci.iloc[:, 0].values, dtype=float).ravel()
+            fc_df[f"resid_fc_hi_{lab}"] = np.asarray(ci.iloc[:, 1].values, dtype=float).ravel()
+        except Exception as ex:  # noqa: BLE001
+            logger.debug("conf_int fc alpha=%s: %s", alpha, ex)
+            fc_df[f"resid_fc_lo_{lab}"] = np.nan
+            fc_df[f"resid_fc_hi_{lab}"] = np.nan
+
+    out = pd.concat([hist_df, fc_df], ignore_index=True)
+    meta: dict[str, Any] = {
+        "ar_order": int(best_p),
+        "aic": float(best_aic),
+        "forecast_horizon": int(eff_horizon),
+        "n_obs_residual": float(n_obs),
+    }
+    return out, meta
+
+
+def marcos_atac_pipeline(
+    df_monthly: pd.DataFrame,
+    *,
+    col_fecha: str = "fecha",
+    col_y: str = "temp_5m",
+    n_forecast: int = ATAC_FORECAST_MONTHS,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """
+    Encadena descomposición Marcos + ATAC sobre residuos y deriva bandas de
+    temperatura futura sumando el ajuste Marcos (`fitted`) y las bandas del residuo.
+    """
+    dec, meta_m = decompose_marcos(
+        df_monthly,
+        col_fecha=col_fecha,
+        col_y=col_y,
+        n_future_months=int(n_forecast),
+    )
+    if dec.empty:
+        return pd.DataFrame(), meta_m
+
+    obs_ok = dec["observation"].notna()
+    if not obs_ok.any():
+        return pd.DataFrame(), meta_m
+
+    last_obs_date = dec.loc[obs_ok, "fecha"].max()
+    rs = dec.loc[dec["fecha"] <= last_obs_date].set_index("fecha")["residual"]
+
+    atac_df, meta_a = atac_forecast(rs, n_forecast=int(n_forecast))
+    if atac_df.empty:
+        pipe = dec.copy()
+        pipe["ar_order"] = np.nan
+        meta_out: dict[str, Any] = {**meta_m, **meta_a}
+        return pipe, meta_out
+
+    pipe = dec.merge(atac_df, on="fecha", how="left")
+
+    fut_mask = pipe["observation"].isna()
+    if "resid_fc_mean" in pipe.columns:
+        pipe.loc[fut_mask, "temp_fc_mean"] = pipe.loc[fut_mask, "fitted"] + pipe.loc[fut_mask, "resid_fc_mean"].fillna(
+            0.0
+        )
+        for lab in ["95", "75", "50"]:
+            lo_col = f"resid_fc_lo_{lab}"
+            hi_col = f"resid_fc_hi_{lab}"
+            if lo_col in pipe.columns:
+                pipe.loc[fut_mask, f"temp_fc_lo_{lab}"] = pipe.loc[fut_mask, "fitted"] + pipe.loc[fut_mask, lo_col].fillna(
+                    0.0
+                )
+            if hi_col in pipe.columns:
+                pipe.loc[fut_mask, f"temp_fc_hi_{lab}"] = pipe.loc[fut_mask, "fitted"] + pipe.loc[fut_mask, hi_col].fillna(
+                    0.0
+                )
+
+    for lab in ["95", "75", "50"]:
+        lo_c = f"resid_pred_lo_{lab}"
+        hi_c = f"resid_pred_hi_{lab}"
+        if lo_c in pipe.columns:
+            pipe[f"temp_pred_lo_{lab}"] = pipe["fitted"] + pipe[lo_c].fillna(0.0)
+        if hi_c in pipe.columns:
+            pipe[f"temp_pred_hi_{lab}"] = pipe["fitted"] + pipe[hi_c].fillna(0.0)
+
+    pipe["ar_order"] = meta_a.get("ar_order", np.nan)
+    meta_out: dict[str, Any] = {**meta_m, **meta_a}
+    return pipe, meta_out
 
 
 def _month_index(dates: pd.Series) -> np.ndarray:

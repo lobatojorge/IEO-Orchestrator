@@ -26,13 +26,22 @@ Uso
 """
 from __future__ import annotations
 
+"""
+DEPRECADO: visualización (vía Pandas)
+====================================
+
+El pipeline de producción ya no depende de Pandas.
+Esta capa de visualización necesita una migración aparte a Polars/Plotly sin Pandas.
+
+Uso recomendado (práctico)
+--------------------------
+Para pipeline (ingesta + anomalías + reportes): `python run/main.py`.
+"""
+
 import importlib.util
 import sys
 from pathlib import Path
-from typing import Optional, Tuple
-
-import pandas as pd
-import plotly.graph_objects as go
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Carga del módulo subyacente — se ejecuta UNA sola vez gracias a sys.modules
@@ -59,24 +68,11 @@ _viz = sys.modules[_VIZ_MODULE_NAME]
 # Re-exportación pública — nombres válidos, tipados como Callable
 # ---------------------------------------------------------------------------
 
-def plot_wginor_anomaly(
-    df: pd.DataFrame,
-    col_anio: str,
-    col_var: str,
-    titulo: str,
-    color_pos: str,
-    color_neg: str,
-    ylabel: str,
-) -> go.Figure:
-    """Anomalías anuales WGINOR para una variable. Delega en 03_visualization."""
-    return _viz.plot_wginor_anomaly(  # type: ignore[no-any-return]
-        df,
-        col_anio=col_anio,
-        col_var=col_var,
-        titulo=titulo,
-        color_pos=color_pos,
-        color_neg=color_neg,
-        ylabel=ylabel,
+def __getattr__(name: str) -> Any:
+    # Importación diferida para no forzar dependencias de Pandas en producción.
+    raise AttributeError(
+        f"`src.visualization.{name}` no está disponible en el runtime de producción (sin pandas). "
+        "Migra visualización a Polars/Plotly o añade dependencias UI en un entorno separado."
     )
 
 
@@ -233,4 +229,22 @@ def plot_hovmoller_termoclina(
         col_temp=col_temp,
         col_estacion=col_estacion,
         resolucion=resolucion,
+    )
+
+
+def plot_marcos_atac_panels(
+    df: pd.DataFrame,
+    *,
+    station_label: str,
+    slope_per_year: float,
+    p_value: float,
+    ar_order: float | int | None = None,
+) -> go.Figure:
+    """Descomposición Marcos + ATAC (tres paneles). Delega en 03_visualization."""
+    return _viz.plot_marcos_atac_panels(  # type: ignore[no-any-return]
+        df,
+        station_label=station_label,
+        slope_per_year=slope_per_year,
+        p_value=p_value,
+        ar_order=ar_order,
     )
