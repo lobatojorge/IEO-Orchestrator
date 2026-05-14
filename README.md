@@ -1,240 +1,159 @@
-# IEO Orchestrator — Pipeline y Visualización de Series Temporales Oceanográficas
+# IEO Orchestrator — Radial Cudillero (pipeline + visor)
 
-> **Trabajo de Fin de Máster** | Pipeline de datos y plataforma web interactiva para el análisis de radiales oceanográficos del IEO (Instituto Español de Oceanografía).
-
----
-
-## ¿Qué hace este proyecto?
-
-Diseña e implementa un **pipeline integral de datos** (ingesta, validación de calidad, análisis estadístico) y una **plataforma web interactiva** (Streamlit) para explorar series temporales históricas de muestreos marinos.
-
-La arquitectura prioriza **automatización**, **reproducibilidad**, **control de calidad riguroso del dato** y su accesibilidad a través de visualizaciones interactivas.
+Pipeline de ingesta sobre **un CSV tabular** de perfiles CTD y visor **Streamlit** (Marcos + ATAC) para la radial de **Cudillero**. El visor lee los **Parquet** generados por la última corrida del pipeline (o la corrida que elijas en la barra lateral).
 
 ---
 
-## 🏗️ Estructura del Proyecto
+## Entrada de datos
 
-```text
-IEO-Orchestrator/
-├── data/                      ← Ciclo de vida de los datos (ver nota ↓)
-│   ├── raw/                   Backup de ficheros crudos del CTD (no se procesa automáticamente)
-│   ├── cnv/                   Punto de entrada del pipeline (ficheros `.cnv` listos para procesar)
-│   ├── interim/               Archivos temporales generados al unificar formatos
-│   ├── processed/             Datos finales limpios y validados
-│   ├── quarantine/            Registros marcados por el inspector ML
-│   └── pending_review/        Datos pendientes de revisión manual
-├── src/                       ← Lógica de backend y análisis
-│   ├── 00_data_scout.py       Reconocimiento y reporte de datos en raw/
-│   ├── 00_ingestion.py        Estandarización y limpieza estructural
-│   ├── 01_agent_inspector.py  Auditoría de calidad y observabilidad
-│   ├── 02_analysis.py         Cálculos, estadística y modelado
-│   ├── 03_visualization.py    Generación de gráficos estáticos
-│   ├── visualization.py       Fachada de importación para app.py
-│   └── fig_export.py          Exportación de figuras a PNG
-├── outputs/                   ← Productos generados por los scripts
-│   ├── figures/               Gráficos generados (PNG)
-│   └── reports/               Informes de validación de calidad
-├── docs/                      ← Documentación y contenido editorial
-│   ├── metodologia_*.md       Textos metodológicos (cargados por la web)
-│   ├── data_dictionary.yaml   Diccionario de variables procesadas
-│   └── descripcion_Radiales.txt
-├── run/                       ← Artefactos de ejecución (CLI + web)
-│   ├── app.py                 Frontend (Streamlit) — plataforma web interactiva
-│   ├── main.py                Orquestador — ejecuta el pipeline completo
-│   ├── lanzador.bat           Script de arranque rápido para Windows
-│   ├── requirements.txt       Dependencias Python
-│   ├── assets/                Logo y recursos de la interfaz web
-│   └── README.md              Guía rápida de uso de `run/`
-└── README.md
-```
+| Ubicación | Uso |
+|-----------|-----|
+| `data/processed/perfiles_all.csv` | **Única entrada del pipeline** (`python run/main.py` / `ieo run`). El visor **no** lee este CSV directamente. |
+| `outputs/runs/<run_id>/data/*.parquet` | **Entrada del visor** (`streamlit run run/app.py`): `perfiles_all.ctd_clean.parquet` y `perfiles_all.ctd_anomalies.parquet` (y metadatos en `provenance.json` si existen). |
+| `data/raw/perfiles_all.csv` | Histórico tabular; conviértelo a processed con **`python run/build_processed_from_raw.py`** (streaming). |
+| `data/raw/` (otros) | Crudos (p. ej. `.cnv`); no entran al pipeline hasta convertirlos. |
+| `data/cnv/` | Residual; puede quedar vacío o con `.gitkeep`. No es entrada del flujo actual. |
 
-> [!IMPORTANT]
-> **Las carpetas `data/` y `outputs/` están vacías** (solo contienen un `.gitkeep`).
-> Para iniciar el pipeline, coloca los ficheros **`.cnv`** en `data/cnv/` y ejecuta `python run/main.py` (o `cd run && python main.py`).
-> `data/raw/` se usa como **copia de seguridad** de los ficheros crudos (p.ej. `.hex/.xmlcon/.hdr/.bl`) por trazabilidad.
+Las carpetas `data/*` (salvo `.gitkeep`) y la mayoría de `outputs/*` están en **`.gitignore`**: no suben al remoto salvo `git add -f`. Antes de `git push`, revisa `git status`.
 
-## ✅ Esquema operativo (entrada: ficheros `.cnv`)
+---
 
-**Premisa de alcance:** la conversión desde los ficheros **crudos del CTD** (p. ej. `.hex` / `.xmlcon`) hasta **salida Sea-Bird lista (`*.cnv`)** la realiza **personal técnico** con las herramientas corporativas habituales. **Este repositorio no sustituye ese paso**: asume que ya dispones de **`.cnv` válidos**.
+## Arranque rápido
 
-**Qué hace este proyecto con los `.cnv`:**
-
-1. **Copiar** los ficheros **`<CAST>.cnv`** en **`data/cnv/`** (único punto de entrada automático del pipeline y del visor Radiales Gijón).
-2. **(Opcional)** Copia de seguridad de crudos en `data/raw/` solo por trazabilidad documental; **no** se procesan solos.
-3. **Ejecutar el pipeline IEO** (normalización canónica, contrato de datos, anomalías, reportes en `outputs/runs/<run_id>/`):
-
-```bash
-python run/main.py
-```
-
-4. **Lanzar Streamlit** (visor; prioriza **`data/cnv/*.cnv`**):
+Orden recomendado: **primero** el pipeline (genera Parquet), **después** el visor.
 
 ```bash
 cd run
-streamlit run app.py
+pip install -r requirements.txt
+python main.py          # pipeline → outputs/runs/<run_id>/
+streamlit run app.py    # visor: elige corrida en la barra lateral
 ```
 
-Si no hay `.cnv` en `data/cnv/`, el visor puede recurrir al CSV legado `data/processed/sireno_gijon_ctd_processed.csv`. Detalle en **`run/README.md`**.
+Desde la raíz: `python run/main.py` · `streamlit run run/app.py`.
 
-### Automatización opcional (solo desarrollo / CI)
+**Docker (opcional):** ver [`docs/operacion_tfm.md`](docs/operacion_tfm.md).
 
-Para convertir `.hex`→`.cnv` **sin sustituir al técnico**, existe una ruta opcional con `DatCnvW` + `run/ieo_cli.py convert-cnv` — véase `tools/seabird/README.md` y `docs/flujo_cnv_seabird_y_automatizacion.md`.
+---
 
-### Contrato de datos (visor + pipeline)
+## Contrato mínimo de una corrida
 
-Reglas de rangos y deriva temporal sobre perfiles y series mensuales: **`docs/contrato_datos_radiales.md`** (implementación en `src/ieo/validation/`).
+Tras un `python run/main.py` exitoso, bajo `outputs/runs/<run_id>/` se espera (entre otros):
 
-> Nota histórica: conversión Sea-Bird → `.cnv` en laboratorio: `docs/flujo_cnv_seabird_y_automatizacion.md`.
+| Ruta relativa a `run_id` | Rol |
+|--------------------------|-----|
+| `provenance.json` | Fuentes y parámetros registrados al inicio de la corrida. |
+| `data/<stem>.ctd_canonical.parquet` | Tabla canónica CTD (Polars → Parquet). |
+| `data/perfiles_all.ctd_clean.parquet` | Filas no marcadas como anomalía por Isolation Forest. |
+| `data/perfiles_all.ctd_anomalies.parquet` | Filas anómalas (puede estar vacío). |
+| `checkpoints/*.html` | Informes por paso (ingesta, contrato radial, anomalías, calidad). |
+| Bitácora bajo `run_root` | Resumen final de la corrida (`write_logbook`). |
 
-### Diagrama (alto nivel, sin datos sensibles)
+El visor exige al menos **`data/perfiles_all.ctd_clean.parquet`**. La caché de Streamlit se invalida si cambia el `mtime`/tamaño de ese fichero.
+
+---
+
+## Flujo de información (pipeline `ieo` + visor)
+
+Los scripts numerados `src/00_*.py` / `01_*.py` son **atajos** hacia el mismo orquestador en muchos casos. El flujo real de producción:
 
 ```mermaid
 flowchart TB
-  classDef dir fill:#f3f4f6,stroke:#9ca3af,color:#111827;
-  classDef file fill:#ffffff,stroke:#d1d5db,color:#111827;
+  subgraph inputs [Entrada]
+    CSV[data_processed_perfiles_all_csv]
+  end
+  subgraph runctx [Contexto de corrida]
+    RID[run_id]
+    RP[RunPaths_outputs_runs]
+    PROV[provenance_json]
+  end
+  subgraph step01 [01 Ingesta]
+    DET[_detect_sources]
+    READ[RadialCsvReader]
+    CAN[build_canonical_lazyframe]
+    PARQ[ctd_canonical_parquet]
+    R01[StepReport_checkpoints]
+  end
+  subgraph step01b [01b Contrato]
+    VAL[validate_canonical_ctd_polars]
+    R01b[StepReport_checkpoints]
+  end
+  subgraph step02 [02 Anomalías]
+    IForest[IsolationForest]
+    ANOM[anomalies_parquet]
+    AUD[audit_parquet]
+    R02[StepReport_checkpoints]
+  end
+  subgraph cierre [Cierre]
+    LOG[write_logbook]
+  end
+  subgraph visor [Visor Streamlit]
+    UI[run_app_py]
+    SEL[selector_corrida]
+    CLEAN[ctd_clean_parquet]
+    ANOM2[ctd_anomalies_parquet]
+  end
+  CSV --> DET
+  DET --> READ
+  READ -->|"LazyFrame + notes IEO_HANDOFF_JSON"| CAN
+  RID --> RP
+  RP --> READ
+  CAN --> PARQ
+  CAN --> R01
+  PARQ --> VAL
+  VAL --> R01b
+  PARQ --> IForest
+  IForest --> ANOM
+  IForest --> AUD
+  IForest --> R02
+  DET --> PROV
+  R02 --> LOG
+  PARQ --> CLEAN
+  IForest --> ANOM2
+  SEL --> UI
+  CLEAN --> UI
+  ANOM2 --> UI
+```
 
-  ROOT["IEO/"]:::dir
-  ROOT --> RUN["run/"]:::dir
-  ROOT --> SRC["src/"]:::dir
-  ROOT --> DOCS["docs/"]:::dir
-  ROOT --> DATA["data/ (no se versiona)"]:::dir
-  ROOT --> OUT["outputs/ (no se versiona)"]:::dir
-  ROOT --> README["README.md"]:::file
-  ROOT --> LICENSE["LICENSE"]:::file
+**Streamlit** (`run/app.py`) carga la corrida elegida (o la más reciente), aplica el **contrato radial** sobre perfiles y serie mensual y dibuja **T a 5 m** y **salinidad a 5 m** (estaciones 1–3), con pestaña de revisión **Isolation Forest**. Detalle: `docs/contrato_datos_radiales.md`, metodología: `docs/metodologia_radiales_cudillero.md`.
 
-  RUN --> RUN_APP["app.py (Streamlit)"]:::file
-  RUN --> RUN_MAIN["main.py (pipeline)"]:::file
-  RUN --> RUN_REQ["requirements.txt"]:::file
-  RUN --> RUN_ASSETS["assets/"]:::dir
+---
 
-  SRC --> S00["00_data_scout.py"]:::file
-  SRC --> S01["00_ingestion.py"]:::file
-  SRC --> S02["01_agent_inspector.py"]:::file
-  SRC --> S03["02_analysis.py"]:::file
-  SRC --> S04["03_visualization.py"]:::file
-  SRC --> SFACADE["visualization.py (fachada)"]:::file
+## Estructura relevante
+
+```text
+├── data/
+│   ├── processed/perfiles_all.csv   # entrada del pipeline (gitignored si contiene datos reales)
+│   └── raw/                           # respaldo; no procesado por el visor
+├── docs/metodologia_radiales_cudillero.md
+├── docs/contrato_datos_radiales.md
+├── docs/operacion_tfm.md              # operación, Docker, TRL acotado, fuera de alcance
+├── src/ieo/                           # pipeline Polars + validación + reportes
+├── run/app.py, run/main.py, run/pipeline_runs.py, run/ieo_cli.py
+├── tests/                             # pytest (ver requirements-dev.txt)
+└── outputs/runs/                      # artefactos por run_id (gitignored)
 ```
 
 ---
 
-## ⚙️ Flujo de Trabajo
+## Stack
 
-```
-data/cnv/  →  00_data_scout.py  →  00_ingestion.py  →  01_agent_inspector.py
-                                                              ↓
-                                         data/processed/  +  data/quarantine/
-                                                              ↓
-                                                     run/app.py (Streamlit)
-```
+Python 3.11+, Polars (pipeline), Pandas + Plotly (visor Streamlit), scikit-learn (anomalías).
 
-### Diagrama de flujo de información (alto nivel)
-
-```mermaid
-flowchart LR
-  classDef lake fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e;
-  classDef agent fill:#fef3c7,stroke:#f59e0b,color:#92400e;
-  classDef data fill:#ecfccb,stroke:#65a30d,color:#365314;
-  classDef report fill:#f3e8ff,stroke:#7c3aed,color:#4c1d95;
-  classDef app fill:#ffe4e6,stroke:#e11d48,color:#881337;
-
-  RAW["Data Lake (backup)<br/>`data/raw/`"]:::lake
-  CNV["Entrada pipeline<br/>`data/cnv/`"]:::lake
-
-  SCOUT["Agente 00 · Reconocimiento<br/>`src/00_data_scout.py`"]:::agent
-  INGEST["Agente 00 · Ingesta/Limpieza<br/>`src/00_ingestion.py`"]:::agent
-  INSPECT["Agente 01 · Inspector/Observabilidad<br/>`src/01_agent_inspector.py`"]:::agent
-  ANALYSIS["Agente 02 · Análisis/Modelado<br/>`src/02_analysis.py`"]:::agent
-  VIZ["Agente 03 · Figuras (opcional)<br/>`src/03_visualization.py`"]:::agent
-
-  INTERIM["`data/interim/`"]:::data
-  PROCESSED["`data/processed/`"]:::data
-  QUAR["`data/quarantine/`"]:::data
-
-  R0["Reporte de reconocimiento<br/>`outputs/reports/…`"]:::report
-  R1["Reporte de observabilidad<br/>`outputs/reports/…observability.html`"]:::report
-  R2["Log anomalías<br/>`outputs/reports/anomalies_log.csv`"]:::report
-  FIGS["Figuras exportadas (opcional)<br/>`outputs/figures/…`"]:::report
-
-  STREAMLIT["Streamlit<br/>`run/app.py`"]:::app
-
-  RAW --> CNV
-  CNV --> SCOUT --> R0
-  CNV --> INGEST --> INTERIM
-  INGEST --> PROCESSED
-  INGEST --> QUAR
-
-  INTERIM --> INSPECT --> PROCESSED
-  INSPECT --> QUAR
-  INSPECT --> R1
-  INSPECT --> R2
-
-  PROCESSED --> ANALYSIS --> PROCESSED
-  PROCESSED --> VIZ --> FIGS
-
-  PROCESSED --> STREAMLIT
-  R1 --> STREAMLIT
-```
-
-1. **Reconocimiento** (`00_data_scout.py`): genera un reporte de la estructura del raw antes de procesar nada.
-2. **Ingesta** (`00_ingestion.py`): estandariza formatos irregulares y produce un CSV tabular limpio.
-3. **Inspección** (`01_agent_inspector.py`): audita la calidad física/biológica del dato; los registros anómalos van a `quarantine/`.
-4. **Análisis y visualización** (`02_analysis.py`, `03_visualization.py`): estadísticas, tendencias y gráficos a disco.
-5. **Plataforma web** (`run/app.py`): interfaz Streamlit para exploración interactiva de los datos validados.
+**Tests:** `pip install -r requirements-dev.txt` y `pytest` desde la raíz del repositorio.
 
 ---
 
-## 🚀 Instalación y Arranque
+## Coherencia pipeline ↔ visor
 
-### 1. Entorno Python
-
-```bash
-cd run
-# Python 3.11 o 3.12 recomendado
-pip install -r requirements.txt
-```
-
-### 2. Datos
-
-Coloca los ficheros **`.cnv`** (y opcionalmente `.xls/.xlsx` / `.nc`) en `data/cnv/`.
-> ⚠️ Los datos reales del IEO **no se incluyen** en este repositorio.
-
-### 3. Ejecutar el pipeline IEO (opcional)
-
-Lee `data/cnv/` y escribe Parquet + reportes en `outputs/runs/<run_id>/`.
-
-```bash
-cd run
-python main.py
-```
-
-### 4. Lanzar la plataforma web (Streamlit)
-
-```bash
-cd run
-streamlit run app.py
-```
-
-O desde la raíz del repo: `streamlit run run/app.py`.
-
-En Windows puedes usar `run/lanzador.bat` (instala dependencias y abre Streamlit; **no** ejecuta `main.py`).
-
-**Radiales Gijón (gráficos):** el visor usa **`data/cnv/*.cnv`** (temperatura a 5 m + ATAC). Sin `.cnv`, intenta el CSV legado `data/processed/sireno_gijon_ctd_processed.csv`. Orden completo: **`run/README.md`**.
+- **Temperatura (perfil):** el visor usa la misma función que el paso 01b del pipeline: `validate_canonical_ctd_polars` sobre el Parquet limpio (vía Polars), no una regla paralela.
+- **Salinidad (perfil):** el contrato canónico actual solo formaliza temperatura en ese wrapper; la salinidad sigue validándose con `validate_profile_dataframe` en el visor (misma familia de reglas que el perfil de T).
+- **Serie mensual / ATAC:** se valida la serie agregada (`validate_monthly_radial_series`). Marcos+ATAC consume la media mensual interpolada a la profundidad objetivo; **no** inyecta puntuaciones ni explicaciones del `audit_log` de Isolation Forest (coste de ingeniería > beneficio para este alcance; ver `docs/operacion_tfm.md`).
+- **Ejecutar pipeline desde el visor:** barra lateral → «Ejecutar pipeline ahora» (subproceso local, sin coste de servicio; puede tardar según tamaño del CSV).
 
 ---
 
-## 🛠️ Stack Tecnológico
+## Más detalle
 
-| Capa | Tecnologías |
-|---|---|
-| Orquestación e ingesta | Python, Pandas, Pathlib |
-| Calidad de datos | Great Expectations |
-| Visualización estática | Plotly, Seaborn, Matplotlib |
-| Plataforma web | Streamlit |
-
----
-
-## 📁 Notas
-
-- Los textos metodológicos se editan en `docs/metodologia_*.md` y la web los carga automáticamente.
-- `src/archive/` contiene módulos en desarrollo no activos en el pipeline principal. No se incluye en el repositorio.
-- La carpeta `auditoria_advicExplorer/` (análisis de la aplicación R Shiny adviceXplorer del ICES) se mantiene localmente y no forma parte de este repositorio.
+- Uso de la carpeta `run/`: **`run/README.md`**.
+- Operación, Docker y marco TRL (TFM): **`docs/operacion_tfm.md`**.
+- Registro de arranque del visor (apéndices): `outputs/audit/registro_ejecuciones.md` (generado en local; carpeta ignorada en git).

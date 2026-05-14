@@ -13,6 +13,7 @@ No sustituye trazabilidad fina del pipeline (JSON/provenance por ``run_id``),
 pero sí da una pista humana continua para quien abre el proyecto sin contexto.
 """
 
+import importlib.util
 import platform
 import sys
 from datetime import datetime, timezone
@@ -21,17 +22,24 @@ from typing import Any
 
 
 AUDIT_FILE_REL = Path("outputs") / "audit" / "registro_ejecuciones.md"
+_CUDILLERO_PATHS_MOD = "_ieo_repo_cudillero_paths_audit"
 
 
-def _count_cnv(project_root: Path) -> int:
-    d = project_root / "data" / "cnv"
-    if not d.is_dir():
-        return 0
-    return len(list(d.glob("*.cnv")))
+def _default_radial_csv_path(project_root: Path) -> Path:
+    """Misma lógica que `ieo.cudillero_paths` sin `import ieo.*` (Streamlit / pip homónimo)."""
+    if _CUDILLERO_PATHS_MOD not in sys.modules:
+        cp = Path(__file__).resolve().parents[1] / "cudillero_paths.py"
+        spec = importlib.util.spec_from_file_location(_CUDILLERO_PATHS_MOD, cp)
+        if spec is None or spec.loader is None:  # pragma: no cover
+            raise ImportError(f"No se encuentra {cp}")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[_CUDILLERO_PATHS_MOD] = mod
+        spec.loader.exec_module(mod)
+    return sys.modules[_CUDILLERO_PATHS_MOD].default_radial_csv_path(project_root)
 
 
-def _csv_legacy_exists(project_root: Path) -> bool:
-    return (project_root / "data" / "processed" / "sireno_gijon_ctd_processed.csv").is_file()
+def _radial_csv_exists(project_root: Path) -> bool:
+    return _default_radial_csv_path(project_root).is_file()
 
 
 def append_public_run_journal_entry(
@@ -55,8 +63,7 @@ def append_public_run_journal_entry(
     now = datetime.now(timezone.utc)
     iso = now.strftime("%Y-%m-%d %H:%M:%S UTC")
 
-    n_cnv = _count_cnv(project_root)
-    has_csv = _csv_legacy_exists(project_root)
+    has_csv = _radial_csv_exists(project_root)
 
     lines: list[str] = [
         "---",
@@ -64,14 +71,14 @@ def append_public_run_journal_entry(
         "",
         f"- **Tipo de ejecución:** `{kind}`",
         f"- **Python:** `{sys.version.split()[0]}` · **Plataforma:** `{platform.platform()}`",
-        f"- **Datos locales:** `{n_cnv}` fichero(s) `.cnv` en `data/cnv/` · CSV legado Gijón: **{'sí' if has_csv else 'no'}** (`data/processed/sireno_gijon_ctd_processed.csv`)",
+        f"- **CSV radial Cudillero (`data/processed/perfiles_all.csv`):** **{'presente' if has_csv else 'ausente'}**",
         "",
         "### Transparencia (lectura para investigación)",
         "",
         "- Las gráficas son **herramientas de exploración**; una figura clara **no implica** que el fenómeno sea simple ni que el modelo sea el único válido.",
         "- El bloque tipo **Marcos + ATAC** asume una **descomposición mensual** (tendencia + estacionalidad fija por mes + residuos) y, cuando procede, **memoria de corto plazo** en residuos. Con **pocos meses** o muchos huecos, los resultados pueden ser **inestables o no ajustables**.",
         "- La **T a 5 m** depende de que el perfil **abraque 5 m**; si no, ese mes puede quedar vacío aunque el CTD tenga buena calidad en otras profundidades.",
-        "- Los **CNV** pueden llevar inferencias (estación por nombre de fichero, tiempo por cabecera). Cualquier inferencia es una **fuente de error** si el convenio de nombres no es estricto.",
+        "- Ficheros en `data/raw/` (p. ej. `.cnv`) son **solo respaldo** y no entran al pipeline ni al visor salvo copia explícita al CSV de trabajo.",
         "",
         "### Qué no registra este fichero",
         "",

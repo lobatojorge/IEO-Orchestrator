@@ -1,4 +1,4 @@
-# Contrato de datos · Radiales Gijón (visor + pipeline)
+# Contrato de datos · Radiales Cudillero (visor + pipeline)
 
 Este documento describe las reglas que implementa `src/ieo/validation/radial_contract.py`.
 
@@ -6,7 +6,7 @@ Este documento describe las reglas que implementa `src/ieo/validation/radial_con
 
 | Entrada | Momento |
 |---------|---------|
-| CSV legado / CNV en **Streamlit** (`run/app.py`) | Tras construir la serie mensual interpolada a la profundidad objetivo y **antes** de Marcos+ATAC. Si hay violaciones **ERROR**, el gráfico **no se muestra** salvo checkbox explícito de diagnóstico. |
+| CSV en **Streamlit** (`run/app.py`) | Tras construir la serie mensual interpolada a la profundidad objetivo y **antes** de Marcos+ATAC. Si hay violaciones **ERROR**, el gráfico **no se muestra** salvo checkbox explícito de diagnóstico. |
 | Parquet **canónico** (`*.ctd_canonical.parquet`) | Paso **01b** del pipeline (`run/main.py`): informe en `outputs/runs/<run>/checkpoints/` y mensaje en stderr si hay errores. |
 
 ## Umbrales por defecto (`RadialContractThresholds`)

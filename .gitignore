@@ -35,6 +35,12 @@ outputs/runs/*
 outputs/tables/*
 !outputs/**/.gitkeep
 
+# Artefactos locales / demos (no versionar)
+outputs/audit/*
+outputs/temp/*
+outputs/demo_logbook/*
+experiments/
+
 # ─────────────────────────────────────────────
 # Documentación/archivos locales grandes o temporales
 # ─────────────────────────────────────────────

@@ -950,7 +950,7 @@ def compute_data_metadata(
         meta["resolucion_ctd_mediana_m"] = None
         meta["nota_resolucion"] = "No se pudo estimar la resolución vertical."
 
-    meta["datos_procesados"] = True  # Flag fijo; el CSV proviene de sireno_..._processed.csv
+    meta["datos_procesados"] = True  # CSV radial tabular (perfiles_all.csv)
 
     return meta
 
@@ -1136,14 +1136,13 @@ def plot_wginor_dual_anomaly(
 def _load_local_csv_if_available() -> Optional[pd.DataFrame]:
 
     """
-    Intenta cargar el CSV procesado del flujo Sireno Gijón CTD.
+    Intenta cargar el CSV tabular radial (Cudillero) si existe en disco.
     """
     project_root = Path(__file__).resolve().parents[1]
     data_dir = project_root / "data" / "processed"
 
     candidates = [
-        "sireno_gijon_ctd_processed.csv",
-        "sireno_gijon_ctd_forecast.csv",
+        "perfiles_all.csv",
     ]
 
     for name in candidates:

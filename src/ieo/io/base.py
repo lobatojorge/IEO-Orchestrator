@@ -44,8 +44,8 @@ def reader_for_path(source: Path) -> str:
     """
 
     ext = source.suffix.lower()
-    if ext == ".cnv":
-        return "cnv"
+    if ext == ".csv":
+        return "csv"
     if ext in (".xls", ".xlsx"):
         return "excel"
     if ext in (".nc", ".netcdf"):

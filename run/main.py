@@ -21,8 +21,8 @@ def main() -> None:
     print("\n" + "=" * 80)
     print(" ORQUESTADOR (PRODUCCIÓN) ".center(80, "="))
     print("=" * 80)
-    print("Fuentes esperadas: ficheros `.cnv` (y opcionalmente `.xls/.xlsx` / `.nc`) en `data/cnv/`")
-    print("Nota: `data/raw/` se reserva como copia de seguridad de ficheros crudos del CTD (no se procesa).")
+    print("Entrada: `data/processed/perfiles_all.csv` (p. ej. generado desde raw con `python run/build_processed_from_raw.py`).")
+    print("Nota: el CSV largo en `data/raw/` se materializa a processed con `python run/build_processed_from_raw.py`.")
     print("-" * 80)
 
     # Import diferido: permite ejecutar desde `run/` sin instalar paquete.

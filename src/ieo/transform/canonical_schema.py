@@ -63,12 +63,13 @@ def normalize_ctd_columns(lf: pl.LazyFrame, *, schema: CTDCanonicalSchema) -> pl
 
     # Profundidad
     col_z = _first_present(
-        ["profundidad", "depth", "dep", "depsm", "dep_sm", "dep_sm [m]", "prdm", "prdm [m]"],
+        ["profundidad_m", "profundidad", "depth", "dep", "press", "depsm", "dep_sm", "dep_sm [m]", "prdm", "prdm [m]"],
         cols,
     )
     # Temperatura
     col_t = _first_present(
         [
+            "temperatura_c",
             "temperatura",
             "temp",
             "temperature",
@@ -79,7 +80,10 @@ def normalize_ctd_columns(lf: pl.LazyFrame, *, schema: CTDCanonicalSchema) -> pl
         cols,
     )
     # Salinidad (opcional)
-    col_s = _first_present(["salinidad", "salinity", "sal", "sal00"], cols)
+    col_s = _first_present(
+        ["salinidad_psu", "salinidad", "salinity", "sal", "sal00"],
+        cols,
+    )
 
     # Tiempo
     col_fecha = _first_present(
@@ -87,7 +91,7 @@ def normalize_ctd_columns(lf: pl.LazyFrame, *, schema: CTDCanonicalSchema) -> pl
         cols,
     )
     # Estación / cast
-    col_est = _first_present(["estacion", "station"], cols)
+    col_est = _first_present(["estacion", "station", "est"], cols)
     col_cast = _first_present(["cast"], cols)
 
     exprs: list[pl.Expr] = []

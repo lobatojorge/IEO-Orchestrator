@@ -1,6 +1,6 @@
 """
-Permite: python -m ieo convert-cnv --project-root .
-(con `src` en PYTHONPATH, p. ej. desde la raíz del repo con la variable habitual).
+Permite: python -m ieo run --project-root .
+(con `src` en PYTHONPATH, p. ej. desde la raíz del repo).
 """
 
 from __future__ import annotations

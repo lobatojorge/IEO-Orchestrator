@@ -25,13 +25,12 @@ import csv
 # El script vive en src/, así que el raíz del proyecto es su carpeta padre.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-CNV_DIR     = PROJECT_ROOT / "data" / "cnv"
-REPORTS_DIR = PROJECT_ROOT / "outputs" / "reports"
+PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
 
-# Flujo actual: reconocimiento de datasets procesables en data/cnv
-REPORT_NAME = "recon_data_cnv.txt"
+# Flujo actual: reconocimiento del CSV en data/processed/
+REPORT_NAME = "recon_perfiles_all.txt"
 DATA_DICTIONARY_PATH = PROJECT_ROOT / "docs" / "data_dictionary.yaml"
-PROCESSED_SIRENO_PATH = PROJECT_ROOT / "data" / "processed" / "sireno_gijon_ctd_processed.csv"
+PERFILES_ALL_PATH = PROJECT_ROOT / "data" / "processed" / "perfiles_all.csv"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -560,7 +559,7 @@ def build_report(
 
 def scan_raw_files(directory: Path) -> list[Path]:
     """
-    Devuelve la lista de archivos a analizar en `data/cnv/`.
+    Devuelve la lista de archivos tabulares en ``directory`` (p. ej. ``data/processed``).
 
     Extensiones soportadas (case-insensitive):
     - .csv, .tsv, .txt
@@ -680,13 +679,16 @@ def main() -> None:
     else:
         print("[--] Sin glosario; informe sin descripciones semánticas.")
 
-    # 1 · Escanear archivos en data/cnv --------------------------------------
-    files = scan_raw_files(CNV_DIR)
+    # 1 · Escanear CSV en data/processed --------------------------------------
+    files = scan_raw_files(PROCESSED_DIR)
+    preferred = PROCESSED_DIR / "perfiles_all.csv"
+    if preferred.is_file():
+        files = [preferred]
     if not files:
-        print(f"[!!] No se encontraron archivos soportados en {CNV_DIR}")
+        print(f"[!!] No se encontraron archivos CSV en {PROCESSED_DIR} (esperado: perfiles_all.csv)")
         sys.exit(1)
 
-    print(f"[OK] Archivos detectados ({len(files)}) en data/cnv/:")
+    print(f"[OK] Archivos a analizar ({len(files)}) en {PROCESSED_DIR}:")
     for p in files:
         print(f"     - {p.name}")
 
@@ -729,7 +731,7 @@ def main() -> None:
     # 3.1 · Bloque de observabilidad (a 5 m) basado en CSV procesado ----------
     # Esto responde a la pregunta operativa: "¿este año está bien muestreado o faltan meses?"
     try:
-        cov = _try_build_sampling_coverage_block_processed_csv(PROCESSED_SIRENO_PATH)
+        cov = _try_build_sampling_coverage_block_processed_csv(PERFILES_ALL_PATH)
     except Exception:
         cov = None
     if cov:

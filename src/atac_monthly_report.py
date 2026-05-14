@@ -112,13 +112,14 @@ def build_atac_monthly_figure(
     if dec.empty:
         raise ValueError(f"No se pudo ajustar el modelo base (Marcos): {meta_m}")
 
+    holdout_eff = int(float(meta_m.get("holdout_months", holdout_months)))
     cutoff = pd.to_datetime(meta_m["cutoff_holdout_start"])
 
     rs = dec.loc[dec["fecha"] < cutoff].set_index("fecha")["residual"]
     atac_df, meta_a = analysis.atac_holdout_bands_on_residuals(
         rs,
         cutoff_holdout_start=cutoff,
-        holdout_months=holdout_months,
+        holdout_months=holdout_eff,
     )
     if atac_df.empty:
         raise ValueError(f"No se pudo ajustar ATAC (residuos): {meta_a}")
@@ -269,7 +270,7 @@ def build_atac_monthly_figure(
             text=(
                 f"<span style='font-size:22px'><b>{var_label} mensual ({y0}–{y1})</b></span>"
                 f"<br><span style='font-size:18px'><b>Estación {station_label}</b></span>"
-                f"<br><span style='font-size:12px'>Evaluación de los últimos {holdout_months} meses (desde {cutoff_txt}) · AR(residuos)={ar_txt}</span>"
+                f"<br><span style='font-size:12px'>Evaluación de los últimos {holdout_eff} meses (desde {cutoff_txt}) · AR(residuos)={ar_txt}</span>"
             ),
             x=0.02,
         ),
@@ -302,7 +303,7 @@ def build_atac_monthly_figure(
             "- Es un **rango de variación normal** alrededor del modelo según el histórico.",
             "- Se interpreta como: “aunque el patrón se mantenga, los meses reales suelen oscilar un poco por encima o por debajo”.",
             "",
-            f"**Evaluación del último tramo (rojo) – holdout de {holdout_months} meses (desde {cutoff_txt})**",
+            f"**Evaluación del último tramo (rojo) – holdout de {holdout_eff} meses (desde {cutoff_txt})**",
             "- Esos meses se dejan aparte para evaluar el final de la serie: **no se usan para ajustar** el modelo base.",
             "- ATAC trabaja con los **residuos** $\\varepsilon_t$ (el “extra” respecto a la línea azul) y aprende si hay **inercia/racha** de un mes a otro.",
             f"- La etiqueta **AR(residuos)={ar_txt}** resume cuánta memoria detecta el modelo en los residuos (p=0,1,2; se elige por AIC: equilibrio entre ajustar bien y no complicarse).",

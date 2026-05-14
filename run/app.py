@@ -12,24 +12,91 @@ y sus helpers (fuera del alcance del plan de refactor del pipeline).
 """
 from __future__ import annotations
 
+import importlib.util
 import re
 import sys
-import tempfile
+from datetime import datetime
 from pathlib import Path
 
-import pandas as pd
+RUN_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = RUN_DIR.parent
+_SRC_DIR = (PROJECT_ROOT / "src").resolve()
+_IEO_LOCAL = _SRC_DIR / "ieo"
+
+
+def _bootstrap_ieo_repo_path() -> None:
+    """`run/` para `cudillero_csv`; `src/` primero; quita `ieo` pip homónimo de `sys.modules`."""
+    run_s = str(RUN_DIR)
+    if run_s not in sys.path:
+        sys.path.insert(0, run_s)
+    s = str(_SRC_DIR)
+    while s in sys.path:
+        sys.path.remove(s)
+    sys.path.insert(0, s)
+    local_init = (_IEO_LOCAL / "__init__.py").resolve()
+
+    def _loaded_ieo_is_local(mod: object) -> bool:
+        f = getattr(mod, "__file__", None)
+        if f:
+            return Path(f).resolve() == local_init
+        p = getattr(mod, "__path__", None)
+        if p is None:
+            return False
+        roots = list(p) if not isinstance(p, (str, bytes)) else [p]
+        want = _IEO_LOCAL.resolve()
+        return any(Path(x).resolve() == want for x in roots)
+
+    if sys.modules.get("ieo") is not None and not _loaded_ieo_is_local(sys.modules["ieo"]):
+        for k in list(sys.modules):
+            if k == "ieo" or k.startswith("ieo."):
+                del sys.modules[k]
+
+
+_bootstrap_ieo_repo_path()
+
+from pipeline_runs import (
+    LATEST_SENTINEL,
+    PipelineViewerLoadResult,
+    clean_parquet_cache_token,
+    list_valid_run_roots,
+    load_pipeline_viewer_data,
+    read_provenance_dict,
+    resolve_run_root_for_ui,
+)
+
 import streamlit as st
+
+st.set_page_config(
+    page_title="Radiales Cudillero · IEO",
+    layout="wide",
+    page_icon=str(RUN_DIR / "assets" / "logo.webp"),
+)
+
+import pandas as pd
 import plotly.graph_objects as go
 import markdown
 import numpy as np
 
-# Rutas base
-RUN_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = RUN_DIR.parent
-METODOLOGIA_RADIALES_GIJON_MD = PROJECT_ROOT / "docs" / "metodologia_radiales_gijon.md"
+METODOLOGIA_RADIALES_CUDILLERO_MD = PROJECT_ROOT / "docs" / "metodologia_radiales_cudillero.md"
 
-# Profundidades estándar (m) para interpolación en perfil — acordar con metodología.
-TARGET_DEPTHS_M: tuple[float, ...] = (5.0, 30.0, 50.0, 100.0)
+_radial_contract_mod: object | None = None
+
+
+def _load_radial_contract_mod() -> object:
+    """Import perezoso: el contrato radial solo se carga al abrir la vista (arranque más rápido)."""
+    global _radial_contract_mod
+    if _radial_contract_mod is not None:
+        return _radial_contract_mod
+    _rc_path = _SRC_DIR / "ieo" / "validation" / "radial_contract.py"
+    _rc_spec = importlib.util.spec_from_file_location("_ieo_streamlit_radial_contract", _rc_path)
+    if _rc_spec is None or _rc_spec.loader is None:  # pragma: no cover
+        raise ImportError(f"No se pudo cargar el contrato radial desde {_rc_path}")
+    _rc_mod = importlib.util.module_from_spec(_rc_spec)
+    sys.modules[str(_rc_spec.name)] = _rc_mod
+    _rc_spec.loader.exec_module(_rc_mod)
+    _radial_contract_mod = _rc_mod
+    return _rc_mod
+
 
 # Metadatos de las variables del CSV: etiqueta legible y unidades para el gráfico.
 # Las variables que no estén aquí usarán el nombre de columna como etiqueta y "" como unidad.
@@ -60,33 +127,7 @@ def _atac_allowed_for_column(col_name: str) -> bool:
     return True
 
 
-# Garantiza importación: raíz (src.* legacy) y src/ (paquete ieo)
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-_SRC_DIR = PROJECT_ROOT / "src"
-if str(_SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(_SRC_DIR))
-
-from src.atac_monthly_report import build_atac_monthly_figure  # noqa: E402
-
-# Misma convención que el resto del visor: paquete `src.*` con PROJECT_ROOT en sys.path
-# (no `import ieo.*`, que solo funciona si …/src está solo como raíz).
-from src.ieo.validation.radial_contract import (  # noqa: E402
-    ViolationSeverity,
-    format_violations_markdown,
-    infer_variable_kind,
-    validate_monthly_radial_series,
-    validate_profile_dataframe,
-)
-
-# ---------------------------------------------------------------------------
-# Configuración de página
-# ---------------------------------------------------------------------------
-st.set_page_config(
-    page_title="Radiales Gijón · IEO",
-    layout="wide",
-    page_icon=str(RUN_DIR / "assets" / "logo.webp"),
-)
+# build_atac_monthly_figure y radial_contract: carga perezosa (ver render_radiales_cudillero / _render_series_and_atac).
 
 # ---------------------------------------------------------------------------
 # Utilidades
@@ -106,12 +147,19 @@ def load_methodology(product_id: str) -> str:
     )
 
 
-def parse_gijon_station_coords_from_methodology(md_text: str) -> list[dict[str, float | int | str]]:
-    """
-    Extrae lat/lon WGS84 de `metodologia_radiales_gijon.md` únicamente si están documentadas.
+@st.cache_data(show_spinner=False)
+def _cached_cudillero_methodology_text() -> str:
+    if METODOLOGIA_RADIALES_CUDILLERO_MD.exists():
+        try:
+            return METODOLOGIA_RADIALES_CUDILLERO_MD.read_text(encoding="utf-8")
+        except OSError:
+            pass
+    return load_methodology("radiales_cudillero")
 
-    Orden: comentario HTML `<!-- E1 … | E2 … | E3 … | E4 … -->` (también admite solo E1–E3),
-    o coordenadas DMS en viñetas `**Estación N · …** (…°…′N, …°…′W)`.
+
+def parse_radial_station_coords_from_methodology(md_text: str) -> list[dict[str, float | int | str]]:
+    """
+    Extrae lat/lon WGS84 del markdown de metodología (comentario HTML E1|E2|E3 o DMS en viñetas).
     """
     if "<p>Texto de metodología pendiente" in md_text:
         return []
@@ -134,9 +182,9 @@ def parse_gijon_station_coords_from_methodology(md_text: str) -> list[dict[str, 
     )
     if block3:
         return [
-            {"estacion": 1, "lat": float(block3.group(1)), "lon": float(block3.group(2)), "nombre": "E1 · Costa"},
-            {"estacion": 2, "lat": float(block3.group(3)), "lon": float(block3.group(4)), "nombre": "E2 · Plataforma"},
-            {"estacion": 3, "lat": float(block3.group(5)), "lon": float(block3.group(6)), "nombre": "E3 · Talud"},
+            {"estacion": 1, "lat": float(block3.group(1)), "lon": float(block3.group(2)), "nombre": "E1 · E1CU"},
+            {"estacion": 2, "lat": float(block3.group(3)), "lon": float(block3.group(4)), "nombre": "E2 · E2CU"},
+            {"estacion": 3, "lat": float(block3.group(5)), "lon": float(block3.group(6)), "nombre": "E3 · E3CU"},
         ]
 
     dms_pat = re.compile(
@@ -156,12 +204,12 @@ def parse_gijon_station_coords_from_methodology(md_text: str) -> list[dict[str, 
     return found
 
 
-def build_gijon_radial_map_figure(stations: list[dict[str, float | int | str]]) -> go.Figure:
+def build_cudillero_radial_map_figure(stations: list[dict[str, float | int | str]]) -> go.Figure:
     """
     Mapa interactivo con marcadores diferenciados por batimetría.
     Colores graduados del azul claro (costa) al azul oscuro (talud profundo).
     """
-    center_lat, center_lon = 43.545, -5.661
+    center_lat, center_lon = 43.689, -6.150
     zoom = 8.6
     if stations:
         lats = [float(s["lat"]) for s in stations]
@@ -193,7 +241,7 @@ def build_gijon_radial_map_figure(stations: list[dict[str, float | int | str]]) 
 
     if stations:
         # Profundidades nominales por estación (para tooltip y color)
-        _DEPTH_LABELS = {1: "~50 m · Costa", 2: "~150 m · Plataforma", 3: "~500 m · Talud", 4: "Talud profundo"}
+        _DEPTH_LABELS = {1: "~65 m · E1CU", 2: "~130 m · E2CU", 3: "~850 m · E3CU", 4: "Estación 4"}
         # Gradiente azul claro → azul marino por profundidad
         _DEPTH_COLORS = ["#5ea8d4", "#2b6cb0", "#1a3f6f", "#0c1f3f"]
 
@@ -243,7 +291,7 @@ def build_gijon_radial_map_figure(stations: list[dict[str, float | int | str]]) 
         paper_bgcolor="#f8fafc",
         plot_bgcolor="#f8fafc",
         showlegend=False,
-        uirevision="gijon_map",
+        uirevision="cudillero_map",
     )
     return fig
 
@@ -261,7 +309,7 @@ def _render_data_governance_card() -> None:
         unsafe_allow_html=True,
     )
     pasos = [
-        ("📂", "Fichero CNV", "salida del CTD", False),
+        ("📄", "Parquet pipeline", "ctd_clean + anomalías", False),
         ("🔄", "Normalización", "formato canónico", False),
         ("🔍", "Control QC", "cuarentena si anomalía", False),
         ("📈", "Análisis", "Marcos + ATAC", False),
@@ -300,316 +348,138 @@ def _render_data_governance_card() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _infer_estacion_from_cnv_path(path: Path) -> int:
-    """
-    Heurística: `E1`…`E4` en el nombre, `station_2`, o último grupo de 1–2 dígitos razonable.
-    Por defecto 1 (un solo CNV sin pista se trata como estación 1).
-    """
-    stem = path.stem
-    m = re.search(r"[Ee]([1-9])", stem)
-    if m:
-        return int(m.group(1))
-    m = re.search(r"(?:station|st|est)[_\-]?(\d+)", stem, re.IGNORECASE)
-    if m:
-        return max(1, min(99, int(m.group(1))))
-    m = re.search(r"_(\d{1,2})(?:_|$)", stem)
-    if m:
-        d = int(m.group(1))
-        if 1 <= d <= 12:
-            return d
-    return 1
+@st.cache_data(show_spinner="Cargando Parquet de la corrida seleccionada…")
+def load_cudillero_pipeline_viewer(run_root_str: str, cache_token: str) -> PipelineViewerLoadResult | None:
+    """``cache_token`` solo participa en la clave de caché de Streamlit (mtime/tamaño del Parquet limpio)."""
+    _ = cache_token
+    return load_pipeline_viewer_data(Path(run_root_str))
 
 
-def _cnv_header_start_time(path: Path) -> pd.Timestamp | None:
-    """Lee `# start_time = ...` típico de cabecera Sea-Bird."""
-    try:
-        with path.open("rt", encoding="utf-8", errors="replace") as f:
-            for _ in range(500):
-                line = f.readline()
-                if not line:
-                    break
-                m = re.match(r"^\s*#\s*start_time\s*=\s*(.+?)\s*$", line, re.IGNORECASE)
-                if m:
-                    raw = m.group(1).strip()
-                    # Sea-Bird suele añadir sufijos informativos, p. ej.:
-                    # "Apr 02 2026 09:49:57 [System UTC, header]"
-                    # Pandas no lo parsea si dejamos el sufijo entre corchetes.
-                    raw = raw.split("[", 1)[0].strip()
-                    ts = pd.to_datetime(raw, errors="coerce")
-                    if pd.notna(ts):
-                        return pd.Timestamp(ts)
-    except OSError:
-        pass
-    return None
+def _render_isolation_forest_tab(pipe: PipelineViewerLoadResult) -> None:
+    st.subheader("Revisión Isolation Forest")
+    st.caption(
+        f"run_id `{pipe.run_root.name}` · Parquet anomalías: `{pipe.run_root / 'data' / 'perfiles_all.ctd_anomalies.parquet'}`"
+    )
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Filas limpias", f"{len(pipe.df_clean):,}")
+    c2.metric("Filas anómalas", f"{len(pipe.df_anomalies):,}")
+    c3.metric("Total (viz)", f"{len(pipe.df_concat_viz):,}")
 
+    show_cols = [
+        c
+        for c in (
+            "fecha",
+            "estacion",
+            "cast",
+            pipe.col_prof,
+            pipe.col_temp,
+            pipe.col_sal,
+            "anomaly_score",
+            "run_id",
+            "source_file",
+            "row_id",
+        )
+        if c in pipe.df_anomalies.columns
+    ]
+    if pipe.df_anomalies.empty:
+        st.info("Isolation Forest no marcó ninguna fila como anómala en esta corrida.")
+    else:
+        st.dataframe(
+            pipe.df_anomalies[show_cols] if show_cols else pipe.df_anomalies,
+            use_container_width=True,
+            height=min(400, 120 + 28 * len(pipe.df_anomalies)),
+        )
 
-def _pick_col(cols_lower: dict[str, str], candidates: tuple[str, ...]) -> str | None:
-    for cand in candidates:
-        key = cand.lower()
-        if key in cols_lower:
-            return cols_lower[key]
-    return None
-
-
-# Columnas CNV opcionales (nombre estable en merge → candidatos en cabecera lower).
-_CNV_EXTRA_VALUE_SPECS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("fluorescencia_cdom", ("wetcdom",)),
-    ("fluorescencia_afl", ("fleco-afl", "flec0-afl")),
-    ("turbidez_ntu", ("turbwetntu0",)),
-    ("cstar_at0", ("cstarat0",)),
-    ("cstar_tr0", ("cstartr0",)),
-    ("densidad00", ("density00",)),
-)
-
-
-def _load_merged_cnv_profiles(cnv_dir: Path) -> pd.DataFrame | None:
-    """
-    Lee todos los ``.cnv`` de ``cnv_dir``, normaliza a columnas ``fecha``, ``estacion``,
-    ``profundidad_m``, ``temperatura_c``, ``salinidad_psu`` (opcional) y ``acronimo`` (lance).
-    """
-    from ieo.io.cnv_reader import CNVReader  # noqa: PLC0415
-    from ieo.transform.canonical_schema import CTDCanonicalSchema, normalize_ctd_columns  # noqa: PLC0415
-
-    paths = sorted(cnv_dir.glob("*.cnv"))
-    if not paths:
-        return None
-
-    reader = CNVReader()
-    chunks: list[pd.DataFrame] = []
-    for fp in paths:
-        est_default = _infer_estacion_from_cnv_path(fp)
-        try:
-            with tempfile.TemporaryDirectory(prefix="ieo_cnv_") as td:
-                staging = Path(td)
-                res = reader.read(fp, staging_dir=staging)
-                lf = normalize_ctd_columns(res.lazyframe, schema=CTDCanonicalSchema())
-                df = lf.collect().to_pandas()
-        except Exception:
+    viz = pipe.df_concat_viz
+    if viz.empty or "estacion" not in viz.columns:
+        st.warning("Sin datos de visualización.")
+        return
+    ids = sorted({int(float(x)) for x in viz["estacion"].dropna().unique().tolist()})
+    if not ids:
+        st.warning("Sin datos de visualización.")
+        return
+    est_pick = st.selectbox("Estación (perfil T–z)", options=ids, key="if_tab_estacion_tz")
+    sub = viz[viz["estacion"].astype(float) == float(est_pick)].copy()
+    if sub.empty:
+        st.warning("Sin filas para esa estación.")
+        return
+    fig = go.Figure()
+    for flag, lab, col in [
+        (False, "Limpio (IF)", "#2E86AB"),
+        (True, "Anomalía IF", "#C1121F"),
+    ]:
+        s = sub[sub["_viewer_anomaly"] == flag]
+        if s.empty:
             continue
-        if df is None or df.empty:
-            continue
-
-        df.columns = pd.Index([str(c).lower().strip() for c in df.columns])
-        cmap = {str(c).lower().strip(): str(c) for c in df.columns}
-
-        fecha_ser = pd.to_datetime(df.get("fecha"), errors="coerce") if "fecha" in df.columns else pd.Series(pd.NaT, index=df.index)
-        if fecha_ser.isna().all():
-            tcol = _pick_col(
-                cmap,
-                (
-                    "timejv2",
-                    "time_j",
-                    "timej",
-                    "time_s",
-                    "times",
-                    "elapsed_time",
-                    "timestamp",
-                    "datetime",
-                    "date",
-                ),
+        fig.add_trace(
+            go.Scatter(
+                x=s[pipe.col_temp],
+                y=s[pipe.col_prof],
+                mode="markers",
+                name=lab,
+                marker=dict(size=6, color=col, opacity=0.75),
+                text=s["fecha"].astype(str),
+                hovertemplate="T=%{x:.3f} °C<br>z=%{y:.1f} m<br>%{text}<extra></extra>",
             )
-            st0 = _cnv_header_start_time(fp)
-            if tcol is not None:
-                tnum = pd.to_numeric(df[tcol], errors="coerce")
-                if st0 is not None and tnum.notna().any():
-                    if float(tnum.abs().max() or 0) < 1e7:
-                        fecha_ser = pd.Timestamp(st0) + pd.to_timedelta(tnum, unit="s")
-                    else:
-                        fecha_ser = pd.to_datetime(tnum, errors="coerce")
-                elif st0 is not None:
-                    fecha_ser = pd.Series(st0, index=df.index)
-                else:
-                    fecha_ser = pd.to_datetime(df[tcol], errors="coerce")
-            elif st0 is not None:
-                fecha_ser = pd.Series(st0, index=df.index)
-
-        z_col = _pick_col(cmap, ("profundidad_m", "prdm", "depm", "depsm", "dep_sm", "depth", "prd"))
-        t_col = _pick_col(cmap, ("temperatura_c", "t090c", "tv290c", "t068c", "temp09", "temp"))
-        s_col = _pick_col(cmap, ("salinidad_psu", "sal00", "sal10", "sal", "prsal"))
-
-        if z_col is None or t_col is None or fecha_ser.isna().all():
-            continue
-
-        est_col = "estacion"
-        if est_col in df.columns and pd.to_numeric(df[est_col], errors="coerce").notna().any():
-            est_ser = pd.to_numeric(df[est_col], errors="coerce").fillna(est_default).astype(int)
-        else:
-            est_ser = pd.Series(est_default, index=df.index, dtype=int)
-
-        block_data: dict[str, object] = {
-            "fecha": pd.to_datetime(fecha_ser, errors="coerce"),
-            "estacion": est_ser,
-            "profundidad_m": pd.to_numeric(df[z_col], errors="coerce"),
-            "temperatura_c": pd.to_numeric(df[t_col], errors="coerce"),
-            "salinidad_psu": pd.to_numeric(df[s_col], errors="coerce") if s_col else np.nan,
-            "acronimo": fp.stem,
-        }
-        for out_name, cands in _CNV_EXTRA_VALUE_SPECS:
-            ec = _pick_col(cmap, cands)
-            if ec is not None:
-                block_data[out_name] = pd.to_numeric(df[ec], errors="coerce")
-
-        block = pd.DataFrame(block_data)
-        block = block.dropna(subset=["fecha", "profundidad_m", "temperatura_c", "estacion"])
-        if not block.empty:
-            chunks.append(block)
-
-    if not chunks:
-        return None
-    return pd.concat(chunks, ignore_index=True)
-
-
-@st.cache_data(show_spinner="Cargando datos de Gijón…")
-def load_and_validate_gijon() -> tuple[pd.DataFrame | None, str | None, str | None, str | None, str | None]:
-    """
-    Prioridad:
-
-    1. Ficheros ``*.cnv`` en ``data/cnv/`` (flujo actual del proyecto).
-    2. Si no hay CNV, CSV legado ``data/processed/sireno_gijon_ctd_processed.csv``.
-
-    Devuelve un ``DataFrame`` con columnas canónicas mínimas para el gráfico a 5 m
-    (``fecha``, ``estacion``, ``profundidad_m``, ``temperatura_c``, ``salinidad_psu``, ``acronimo``).
-
-    Returns
-    -------
-    (df, col_anio, col_temp, col_sal, col_prof)
-        ``col_*`` son los nombres de columna usados por el bloque ATAC (nombres fijos en modo CNV).
-    """
-    cnv_dir = PROJECT_ROOT / "data" / "cnv"
-    if cnv_dir.is_dir() and any(cnv_dir.glob("*.cnv")):
-        merged = _load_merged_cnv_profiles(cnv_dir)
-        if merged is None or merged.empty:
-            return None, None, None, None, None
-        merged["año"] = pd.to_datetime(merged["fecha"], errors="coerce").dt.year
-        return merged, "año", "temperatura_c", "salinidad_psu", "profundidad_m"
-
-    ruta = PROJECT_ROOT / "data" / "processed" / "sireno_gijon_ctd_processed.csv"
-    if not ruta.exists():
-        return None, None, None, None, None
-
-    df = pd.read_csv(ruta, sep=None, engine="python")
-    df.columns = pd.Index([str(c).lower().strip() for c in df.columns])
-    cols: list[str] = [str(c) for c in df.columns]
-
-    # --- inferencia del año ---
-    # Prioridad 1: columna "fecha" parseable como datetime
-    col_anio: str | None = None
-    if "fecha" in cols:
-        parsed_fecha = pd.to_datetime(df["fecha"], errors="coerce")
-        if parsed_fecha.notna().any():
-            df["año"] = parsed_fecha.dt.year
-            col_anio = "año"
-    # Prioridad 2: columna numérica directa de año (incluye "anio" sin tilde)
-    if col_anio is None:
-        col_anio = next((c for c in cols if c in ("anio", "año", "ano", "year", "yy")), None)
-    # Prioridad 3: extraer el año de columnas de texto (acronimo, estacion, …)
-    if col_anio is None:
-        for col_name in [*[c for c in cols if c in ("estacion", "acronimo")], *df.select_dtypes(include=["object"]).columns]:
-            extracted = df[col_name].astype(str).str.extract(r"((?:19|20)\d{2})")[0]
-            if extracted.notna().any():
-                df["año"] = pd.to_numeric(extracted, errors="coerce")
-                col_anio = "año"
-                break
-    # Fallback — NO generar años sintéticos; devolvemos None para que la UI avise
-    if col_anio is None:
-        return None, None, None, None, None
-
-    col_temp: str | None = next((c for c in cols if "temp" in c), None)
-    col_sal: str | None = next((c for c in cols if "salin" in c or c == "sal"), None)
-    col_prof: str | None = next((c for c in cols if "prof" in c), None)
-
-    if not all([col_anio, col_temp, col_sal, col_prof]):
-        return None, None, None, None, None
-
-    df[col_prof] = pd.to_numeric(df[col_prof], errors="coerce")  # type: ignore[arg-type]
-    return df, col_anio, col_temp, col_sal, col_prof
+        )
+    fig.update_layout(
+        title=f"Temperatura vs profundidad · estación {est_pick}",
+        xaxis_title="T (°C)",
+        yaxis_title="Profundidad (m)",
+        yaxis_autorange="reversed",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        height=520,
+        margin=dict(l=48, r=24, t=56, b=48),
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 
 # ---------------------------------------------------------------------------
 # Vistas
 # ---------------------------------------------------------------------------
 
-@st.cache_data(show_spinner="Cargando datos CNV de Gijón…")
-def load_gijon_from_cnv() -> pd.DataFrame | None:
-    """Carga CNV desde `data/cnv/*.cnv` y devuelve el DataFrame canónico mínimo (o None)."""
-    cnv_dir = PROJECT_ROOT / "data" / "cnv"
-    if not (cnv_dir.is_dir() and any(cnv_dir.glob("*.cnv"))):
-        return None
-    merged = _load_merged_cnv_profiles(cnv_dir)
-    if merged is None or merged.empty:
-        return None
-    merged["año"] = pd.to_datetime(merged["fecha"], errors="coerce").dt.year
-    return merged
 
+def render_radiales_cudillero() -> None:
+    """Vista Radiales Cudillero: mapa, metodología y Marcos+ATAC desde la corrida del pipeline elegida en la barra lateral."""
 
-@st.cache_data(show_spinner="Cargando datos CSV de Gijón…")
-def load_gijon_from_csv_legacy() -> tuple[pd.DataFrame | None, str | None, str | None, str | None, str | None]:
-    """
-    Carga el CSV legado `data/processed/sireno_gijon_ctd_processed.csv`.
-    Devuelve (df, col_anio, col_temp, col_sal, col_prof) o (None, …) si no es válido.
-    """
-    ruta = PROJECT_ROOT / "data" / "processed" / "sireno_gijon_ctd_processed.csv"
-    if not ruta.exists():
-        return None, None, None, None, None
-
-    df = pd.read_csv(ruta, sep=None, engine="python")
-    df.columns = pd.Index([str(c).lower().strip() for c in df.columns])
-    cols: list[str] = [str(c) for c in df.columns]
-
-    # --- inferencia del año ---
-    # Prioridad 1: columna "fecha" parseable como datetime
-    col_anio: str | None = None
-    if "fecha" in cols:
-        parsed_fecha = pd.to_datetime(df["fecha"], errors="coerce")
-        if parsed_fecha.notna().any():
-            df["año"] = parsed_fecha.dt.year
-            col_anio = "año"
-    # Prioridad 2: columna numérica directa de año (incluye "anio" sin tilde)
-    if col_anio is None:
-        col_anio = next((c for c in cols if c in ("anio", "año", "ano", "year", "yy")), None)
-    # Prioridad 3: extraer el año de columnas de texto (acronimo, estacion, …)
-    if col_anio is None:
-        for col_name in [*[c for c in cols if c in ("estacion", "acronimo")], *df.select_dtypes(include=["object"]).columns]:
-            extracted = df[col_name].astype(str).str.extract(r"((?:19|20)\d{2})")[0]
-            if extracted.notna().any():
-                df["año"] = pd.to_numeric(extracted, errors="coerce")
-                col_anio = "año"
-                break
-    # Fallback — NO generar años sintéticos; devolvemos None para que la UI avise
-    if col_anio is None:
-        return None, None, None, None, None
-
-    col_temp: str | None = next((c for c in cols if "temp" in c), None)
-    col_sal: str | None = next((c for c in cols if "salin" in c or c == "sal"), None)
-    col_prof: str | None = next((c for c in cols if "prof" in c), None)
-
-    if not all([col_anio, col_temp, col_sal, col_prof]):
-        return None, None, None, None, None
-
-    df[col_prof] = pd.to_numeric(df[col_prof], errors="coerce")  # type: ignore[arg-type]
-    return df, col_anio, col_temp, col_sal, col_prof
-
-
-def render_radiales_gijon() -> None:
-    """Vista Radiales Gijón: mapa + metodología; series/ATAC desde ``data/cnv/*.cnv`` (o CSV legado)."""
-
-    # Las pestañas (CSV/CNV) usan claves distintas para evitar colisiones de widgets.
     if "estacion_seleccionada_csv" not in st.session_state:
         st.session_state["estacion_seleccionada_csv"] = 1
-    if "estacion_seleccionada_cnv" not in st.session_state:
-        st.session_state["estacion_seleccionada_cnv"] = 1
 
-    st.header("Radiales Gijón")
+    st.header("Radiales Cudillero")
+    _rc = _load_radial_contract_mod()
     _render_data_governance_card()
 
-    if METODOLOGIA_RADIALES_GIJON_MD.exists():
-        try:
-            md_method = METODOLOGIA_RADIALES_GIJON_MD.read_text(encoding="utf-8")
-        except Exception:
-            md_method = load_methodology("radiales_gijon")
-    else:
-        md_method = load_methodology("radiales_gijon")
-    stations_geo = parse_gijon_station_coords_from_methodology(md_method)
+    valid_runs = list_valid_run_roots(PROJECT_ROOT)
+    if not valid_runs:
+        st.warning("No hay datos procesados en el sistema. Ejecuta el pipeline principal primero.")
+        st.stop()
+
+    choice = st.session_state.get("pipeline_run_select", LATEST_SENTINEL)
+    run_root = resolve_run_root_for_ui(PROJECT_ROOT, choice)
+    if run_root is None:
+        st.warning("No hay datos procesados en el sistema. Ejecuta el pipeline principal primero.")
+        st.stop()
+
+    cache_tok = clean_parquet_cache_token(run_root)
+    pipe = load_cudillero_pipeline_viewer(str(run_root.resolve()), cache_tok)
+    if pipe is None:
+        st.warning("No hay datos procesados en el sistema. Ejecuta el pipeline principal primero.")
+        st.stop()
+
+    with st.expander("Fuente de datos (corrida seleccionada)", expanded=False):
+        st.markdown(
+            f"- **run_id:** `{pipe.run_root.name}`\n"
+            f"- **Parquet limpio:** `{pipe.clean_parquet}`\n"
+            f"- **Filas limpias:** {len(pipe.df_clean):,} · **Filas anómalas (IF):** {len(pipe.df_anomalies):,}"
+        )
+        fc = pipe.df_clean["fecha"].dropna()
+        if len(fc):
+            st.caption(f"Rango fechas (limpias): **{fc.min().date()}** → **{fc.max().date()}**")
+        else:
+            st.caption("Sin fechas válidas en el conjunto limpio.")
+
+    md_method = _cached_cudillero_methodology_text()
+    stations_geo = parse_radial_station_coords_from_methodology(md_method)
 
     col_map, col_txt = st.columns([1, 1], gap="large")
 
@@ -617,16 +487,16 @@ def render_radiales_gijon() -> None:
         if not stations_geo:
             st.info(
                 "Aún no hay coordenadas en metadatos del markdown: el mapa muestra la zona de referencia. "
-                "Añada al final de `docs/metodologia_radiales_gijon.md` la línea `<!-- E1 lat lon | … | E4 … -->` "
+                "Añada al final de `docs/metodologia_radiales_cudillero.md` la línea `<!-- E1 lat lon | … | E4 … -->` "
                 "(solo metadatos; el visor la lee y no se muestra al usuario en el texto)."
             )
-        fig_map = build_gijon_radial_map_figure(stations_geo)
+        fig_map = build_cudillero_radial_map_figure(stations_geo)
         map_sel = st.plotly_chart(
             fig_map,
             use_container_width=True,
             on_select="rerun",
             selection_mode="points",
-            key="gijon_mapbox",
+            key="cud_mapbox",
             config={"displayModeBar": False},
         )
 
@@ -754,20 +624,16 @@ def render_radiales_gijon() -> None:
         target_depth_m: float = 5.0,
         col_estacion: str = "estacion",
         col_fecha: str = "fecha",
+        fixed_station: int | None = None,
+        widget_key_suffix: str = "",
+        df_if_overlay: pd.DataFrame | None = None,
     ) -> None:
-        station_key = f"estacion_seleccionada_{source_label.lower().strip()}"
+        station_key = f"estacion_seleccionada_{source_label.lower().strip()}{widget_key_suffix}"
         if df_gijon is None or df_gijon.empty:
-            if source_label.lower().startswith("cnv"):
-                st.warning(
-                    "No hay datos CNV para gráficos: coloca uno o más **`.cnv`** en **`data/cnv/`** "
-                    "(presión/profundidad, temperatura y tiempo o cabecera `# start_time`). "
-                    "Si el CNV no trae `estacion`, se infiere del **nombre del fichero** (p. ej. `…E2…`)."
-                )
-            else:
-                st.warning(
-                    "No hay datos CSV para gráficos: falta **`data/processed/sireno_gijon_ctd_processed.csv`** "
-                    "o no contiene columnas reconocibles (año/fecha, profundidad, temperatura, salinidad)."
-                )
+            st.warning(
+                "No hay datos listos para graficar: revisa la **corrida seleccionada** en la barra lateral "
+                "y el expander **«Fuente de datos (corrida seleccionada)»** arriba."
+            )
             return
 
         # Resolver columnas en CSV legacy si no se pasan explícitas
@@ -804,28 +670,70 @@ def render_radiales_gijon() -> None:
             return
 
         # --- Contrato de datos radial (QC físico + serie mensual; antes de cualquier modelo) ---
-        vk = infer_variable_kind(str(col_value_resolved))
+        vk = _rc.infer_variable_kind(str(col_value_resolved))
         if "acronimo" in df_gijon.columns:
             cast_keys_t: tuple[str, ...] = ("acronimo", col_estacion)
+            profile_df = df_gijon
         elif "cast" in df_gijon.columns:
             cast_keys_t = ("cast", col_estacion)
+            profile_df = df_gijon
         else:
-            cast_keys_t = (col_estacion,)
+            profile_df = df_gijon.copy()
+            profile_df["_perf_day"] = pd.to_datetime(profile_df[col_fecha], errors="coerce").dt.normalize()
+            cast_keys_t = ("_perf_day", col_estacion)
 
         violations: list = []
         if vk in ("temperature", "salinity"):
-            violations.extend(
-                validate_profile_dataframe(
-                    df_gijon,
-                    col_prof=str(col_prof),
-                    col_value=str(col_value_resolved),
-                    col_estacion=col_estacion,
-                    cast_keys=cast_keys_t,
-                    variable_kind=vk,
+            if vk == "temperature":
+                chk = profile_df.copy()
+                if str(col_value_resolved) != "temperatura_c":
+                    chk = chk.rename(columns={str(col_value_resolved): "temperatura_c"})
+                if str(col_prof) != "profundidad_m":
+                    chk = chk.rename(columns={str(col_prof): "profundidad_m"})
+                need = ["fecha", "estacion", "profundidad_m", "temperatura_c"]
+                if all(c in chk.columns for c in need):
+                    try:
+                        import polars as pl  # noqa: PLC0415
+
+                        ex = [c for c in ("cast", "acronimo") if c in chk.columns]
+                        violations.extend(
+                            _rc.validate_canonical_ctd_polars(pl.from_pandas(chk[need + ex].copy()))
+                        )
+                    except Exception:
+                        violations.extend(
+                            _rc.validate_profile_dataframe(
+                                profile_df,
+                                col_prof=str(col_prof),
+                                col_value=str(col_value_resolved),
+                                col_estacion=col_estacion,
+                                cast_keys=cast_keys_t,
+                                variable_kind="temperature",
+                            )
+                        )
+                else:
+                    violations.extend(
+                        _rc.validate_profile_dataframe(
+                            profile_df,
+                            col_prof=str(col_prof),
+                            col_value=str(col_value_resolved),
+                            col_estacion=col_estacion,
+                            cast_keys=cast_keys_t,
+                            variable_kind="temperature",
+                        )
+                    )
+            else:
+                violations.extend(
+                    _rc.validate_profile_dataframe(
+                        profile_df,
+                        col_prof=str(col_prof),
+                        col_value=str(col_value_resolved),
+                        col_estacion=col_estacion,
+                        cast_keys=cast_keys_t,
+                        variable_kind="salinity",
+                    )
                 )
-            )
             violations.extend(
-                validate_monthly_radial_series(
+                _rc.validate_monthly_radial_series(
                     df_monthly,
                     col_fecha="fecha",
                     col_val="valor_prof",
@@ -834,24 +742,24 @@ def render_radiales_gijon() -> None:
                 )
             )
 
-        errs = [v for v in violations if v.severity == ViolationSeverity.ERROR]
-        warns = [v for v in violations if v.severity == ViolationSeverity.WARNING]
+        errs = [v for v in violations if v.severity == _rc.ViolationSeverity.ERROR]
+        warns = [v for v in violations if v.severity == _rc.ViolationSeverity.WARNING]
 
         if errs:
             st.error(
                 "**Contrato de datos radial:** se han detectado incumplimientos **ERROR**. "
                 "El gráfico no se muestra por defecto hasta revisión (datos no auditados)."
             )
-            st.markdown(format_violations_markdown(errs))
+            st.markdown(_rc.format_violations_markdown(errs))
             unlock = st.checkbox(
                 "Solo diagnóstico interno: mostrar gráfico pese a errores del contrato",
                 value=False,
-                key=f"contract_unlock_err_{source_label}_{col_value_resolved}_{target_depth_m}",
+                key=f"contract_unlock_err_{source_label}_{col_value_resolved}_{target_depth_m}{widget_key_suffix}",
             )
             if not unlock:
                 return
         if warns:
-            st.warning("**Contrato de datos radial:** avisos\n\n" + format_violations_markdown(warns))
+            st.warning("**Contrato de datos radial:** avisos\n\n" + _rc.format_violations_markdown(warns))
 
         with st.expander("Cobertura de datos (transparencia)", expanded=False):
             st.markdown(
@@ -861,49 +769,52 @@ def render_radiales_gijon() -> None:
                 "\n*Sin extrapolación fuera del rango vertical observado en cada lance.*"
             )
 
-        # Selector estación (reutiliza mapa si aplica)
-        if stations_geo:
-            try:
-                pts = (map_sel.selection or {}).get("points", []) if map_sel else []  # type: ignore[union-attr]
-            except Exception:
-                pts = []
-            if pts:
-                cd = pts[0].get("customdata", None)
-                est_val = None
+        # Selector de estación (mapa + radio) o estación fija (p. ej. salinidad ×3)
+        if fixed_station is None:
+            if stations_geo:
                 try:
-                    import numpy as _np  # noqa: PLC0415
+                    pts = (map_sel.selection or {}).get("points", []) if map_sel else []  # type: ignore[union-attr]
                 except Exception:
-                    _np = None  # type: ignore[assignment]
-                if isinstance(cd, (list, tuple)):
-                    est_val = cd[0] if len(cd) > 0 else None
-                elif _np is not None and isinstance(cd, _np.ndarray):  # type: ignore[arg-type]
-                    est_val = cd.flatten()[0] if cd.size > 0 else None
-                elif isinstance(cd, dict):
-                    est_val = cd.get(0, None)
-                    if est_val is None and len(cd) > 0:
-                        est_val = next(iter(cd.values()))
-                if est_val is not None and str(est_val).strip() != "":
-                    st.session_state[station_key] = int(float(est_val))
+                    pts = []
+                if pts:
+                    cd = pts[0].get("customdata", None)
+                    est_val = None
+                    try:
+                        import numpy as _np  # noqa: PLC0415
+                    except Exception:
+                        _np = None  # type: ignore[assignment]
+                    if isinstance(cd, (list, tuple)):
+                        est_val = cd[0] if len(cd) > 0 else None
+                    elif _np is not None and isinstance(cd, _np.ndarray):  # type: ignore[arg-type]
+                        est_val = cd.flatten()[0] if cd.size > 0 else None
+                    elif isinstance(cd, dict):
+                        est_val = cd.get(0, None)
+                        if est_val is None and len(cd) > 0:
+                            est_val = next(iter(cd.values()))
+                    if est_val is not None and str(est_val).strip() != "":
+                        st.session_state[station_key] = int(float(est_val))
 
-        ids_map = [int(s["estacion"]) for s in stations_geo]
-        ids_data = sorted(df_monthly[col_estacion].dropna().unique().astype(int).tolist())
-        opts = sorted(set(ids_map) | set(ids_data))
-        if not opts:
-            opts = [1, 2, 3]
-        if int(st.session_state.get(station_key, opts[0])) not in opts:
-            st.session_state[station_key] = int(opts[0])
+            ids_map = [int(s["estacion"]) for s in stations_geo]
+            ids_data = sorted(df_monthly[col_estacion].dropna().unique().astype(int).tolist())
+            opts = sorted(set(ids_map) | set(ids_data))
+            if not opts:
+                opts = [1, 2, 3]
+            if int(st.session_state.get(station_key, opts[0])) not in opts:
+                st.session_state[station_key] = int(opts[0])
 
-        name_by_id = {int(s["estacion"]): str(s["nombre"]) for s in stations_geo}
-        st.caption("Elija la estación para el gráfico (clic en una marca del mapa o selector siguiente).")
-        st.radio(
-            "Estación",
-            options=opts,
-            horizontal=True,
-            key=station_key,
-            format_func=lambda n: name_by_id.get(int(n), f"Estación {int(n)}"),
-        )
+            name_by_id = {int(s["estacion"]): str(s["nombre"]) for s in stations_geo}
+            st.caption("Elija la estación para el gráfico (clic en una marca del mapa o selector siguiente).")
+            st.radio(
+                "Estación",
+                options=opts,
+                horizontal=True,
+                key=station_key,
+                format_func=lambda n: name_by_id.get(int(n), f"Estación {int(n)}"),
+            )
 
-        selected = int(st.session_state.get(station_key, opts[0]))
+            selected = int(st.session_state.get(station_key, opts[0]))
+        else:
+            selected = int(fixed_station)
         df_station = df_monthly[df_monthly[col_estacion] == int(selected)].copy()
         df_station["fecha"] = pd.to_datetime(df_station["fecha"], errors="coerce")
         df_station["valor_prof"] = pd.to_numeric(df_station["valor_prof"], errors="coerce")
@@ -925,6 +836,8 @@ def render_radiales_gijon() -> None:
         depth_lbl = int(target_depth_m) if float(target_depth_m).is_integer() else target_depth_m
         st.subheader(f"{var_lbl} a {depth_lbl} m — Descomposición Marcos + pronóstico ATAC · Estación {selected}")
         try:
+            from atac_monthly_report import build_atac_monthly_figure  # noqa: PLC0415
+
             monthly_for_atac = df_station[["fecha", "valor_prof"]].rename(columns={"valor_prof": "temp_5m"})
             res = build_atac_monthly_figure(
                 project_root=PROJECT_ROOT,
@@ -945,78 +858,83 @@ def render_radiales_gijon() -> None:
         st.plotly_chart(res.fig, use_container_width=True)
         st.markdown(res.footer_md)
 
-    tab_csv, tab_cnv = st.tabs(["Serie (CSV) — robustez Marcos", "Serie (CNV) — nuevo flujo"])
-    with tab_csv:
-        df_csv, _, col_temp, _col_sal, col_prof = load_gijon_from_csv_legacy()
-        if df_csv is None:
+        if (
+            df_if_overlay is not None
+            and not df_if_overlay.empty
+            and "_viewer_anomaly" in df_if_overlay.columns
+        ):
+            band = df_if_overlay[df_if_overlay[col_estacion] == int(selected)].copy()
+            band[col_fecha] = pd.to_datetime(band[col_fecha], errors="coerce")
+            band[col_prof] = pd.to_numeric(band[col_prof], errors="coerce")
+            vcol = str(col_value_resolved)
+            band[vcol] = pd.to_numeric(band[vcol], errors="coerce")
+            band = band.dropna(subset=[col_fecha, col_prof, vcol])
+            near = band[(band[col_prof] - float(target_depth_m)).abs() <= 3.0]
+            if not near.empty:
+                st.caption(
+                    f"Puntos cerca de **{target_depth_m:g} m** (±3 m): limpio vs anomalía IF (misma variable que el ATAC)."
+                )
+                fig_if = go.Figure()
+                for flag, lab, colm in [
+                    (False, "Limpio (pipeline)", "#2E86AB"),
+                    (True, "Anomalía IF", "#C1121F"),
+                ]:
+                    sl = near[near["_viewer_anomaly"] == flag]
+                    if sl.empty:
+                        continue
+                    fig_if.add_trace(
+                        go.Scatter(
+                            x=sl[col_fecha],
+                            y=sl[vcol],
+                            mode="markers",
+                            name=lab,
+                            marker=dict(size=7, color=colm, opacity=0.78),
+                            hovertemplate=f"%{{x|%Y-%m-%d}}<br>{var_lbl}=%{{y:.4f}}<extra></extra>",
+                        )
+                    )
+                fig_if.update_layout(
+                    title=f"{var_lbl} (±3 m de {target_depth_m:g} m) · estación {selected}",
+                    xaxis_title="Fecha",
+                    yaxis_title=f"{var_lbl} ({var_unt})".strip(),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                    height=380,
+                    margin=dict(l=48, r=24, t=48, b=48),
+                )
+                st.plotly_chart(fig_if, use_container_width=True)
+
+    df_c = pipe.df_clean
+    col_temp, col_sal, col_prof = pipe.col_temp, pipe.col_sal, pipe.col_prof
+    depth_m = 5.0
+    tab_atac, tab_if = st.tabs(["Marcos + ATAC (datos limpios)", "Anomalías Isolation Forest"])
+    with tab_atac:
+        st.subheader("Temperatura a 5 m · Marcos + ATAC")
+        _render_series_and_atac(
+            df_gijon=df_c,
+            source_label="Pipeline",
+            col_prof=col_prof,
+            col_temp=col_temp,
+            col_value=col_temp,
+            target_depth_m=depth_m,
+            fixed_station=None,
+            df_if_overlay=pipe.df_concat_viz,
+        )
+        st.markdown("---")
+        st.subheader("Salinidad a 5 m · Marcos + ATAC (estaciones 1–3)")
+        for sid in (1, 2, 3):
+            st.markdown(f"##### Estación {sid}")
             _render_series_and_atac(
-                df_gijon=None,
-                source_label="CSV",
+                df_gijon=df_c,
+                source_label="Pipeline",
                 col_prof=col_prof,
                 col_temp=col_temp,
+                col_value=col_sal,
+                target_depth_m=depth_m,
+                fixed_station=int(sid),
+                widget_key_suffix=f"_sal_{sid}",
+                df_if_overlay=pipe.df_concat_viz,
             )
-        else:
-            depth_labels = [f"{int(d)} m" if d == int(d) else f"{d} m" for d in TARGET_DEPTHS_M]
-            depth_map = dict(zip(depth_labels, [float(d) for d in TARGET_DEPTHS_M], strict=True))
-            dlab = st.selectbox("Profundidad objetivo", depth_labels, index=0, key="csv_depth_sel")
-            depth_m = depth_map[dlab]
-            cand_vars = ["temperatura", "salinidad", "fluorescencia", "clorofila", "par", "oxigeno", "o_100"]
-            available = [
-                c
-                for c in cand_vars
-                if c in df_csv.columns and pd.to_numeric(df_csv[c], errors="coerce").notna().any()
-            ]
-            if not available:
-                st.warning(
-                    "[CSV] Ninguna columna de variable prevista tiene datos numéricos "
-                    f"entre {cand_vars}."
-                )
-            else:
-                vcol = st.selectbox("Variable", available, key="csv_variable_sel")
-                _render_series_and_atac(
-                    df_gijon=df_csv,
-                    source_label="CSV",
-                    col_prof=col_prof,
-                    col_temp=col_temp,
-                    col_value=vcol,
-                    target_depth_m=depth_m,
-                )
-
-    with tab_cnv:
-        df_cnv = load_gijon_from_cnv()
-        if df_cnv is None:
-            _render_series_and_atac(
-                df_gijon=None,
-                source_label="CNV",
-                col_prof="profundidad_m",
-                col_temp="temperatura_c",
-            )
-        else:
-            depth_labels = [f"{int(d)} m" if d == int(d) else f"{d} m" for d in TARGET_DEPTHS_M]
-            depth_map = dict(zip(depth_labels, [float(d) for d in TARGET_DEPTHS_M], strict=True))
-            dlab = st.selectbox("Profundidad objetivo", depth_labels, index=0, key="cnv_depth_sel")
-            depth_m = depth_map[dlab]
-            skip = {"fecha", "estacion", "profundidad_m", "acronimo", "año"}
-            num_cols = [
-                str(c)
-                for c in df_cnv.columns
-                if str(c) not in skip and pd.api.types.is_numeric_dtype(df_cnv[c])
-            ]
-            pref_order = ["temperatura_c", "salinidad_psu"] + [spec[0] for spec in _CNV_EXTRA_VALUE_SPECS]
-            ordered = [c for c in pref_order if c in num_cols]
-            ordered.extend([c for c in num_cols if c not in ordered])
-            if not ordered:
-                st.warning("[CNV] No hay columnas numéricas de variables para graficar.")
-            else:
-                vcol = st.selectbox("Variable", ordered, key="cnv_variable_sel")
-                _render_series_and_atac(
-                    df_gijon=df_cnv,
-                    source_label="CNV",
-                    col_prof="profundidad_m",
-                    col_temp="temperatura_c",
-                    col_value=vcol,
-                    target_depth_m=depth_m,
-                )
+    with tab_if:
+        _render_isolation_forest_tab(pipe)
 
 
 def main() -> None:
@@ -1024,28 +942,81 @@ def main() -> None:
     if "_public_run_journal_written" not in st.session_state:
         st.session_state["_public_run_journal_written"] = True
         try:
+            _bootstrap_ieo_repo_path()
             from ieo.observability.session_audit import append_public_run_journal_entry  # noqa: PLC0415
 
             append_public_run_journal_entry(PROJECT_ROOT, kind="streamlit_dashboard_boot")
         except Exception:
             pass
 
-    st.markdown("## Radiales Gijón · visor exploratorio")
+    st.markdown("## Radiales Cudillero · visor exploratorio")
+    valid_sidebar = list_valid_run_roots(PROJECT_ROOT)
     with st.sidebar:
+        st.markdown("### Corrida del pipeline")
+        if valid_sidebar:
+            labels: dict[str, str] = {LATEST_SENTINEL: "Última corrida (automático)"}
+            for p in valid_sidebar:
+                labels[p.name] = f"{p.name} · {datetime.fromtimestamp(p.stat().st_mtime).strftime('%Y-%m-%d %H:%M')}"
+            st.selectbox(
+                "Datos a visualizar",
+                options=[LATEST_SENTINEL] + [p.name for p in valid_sidebar],
+                format_func=lambda x: labels.get(str(x), str(x)),
+                key="pipeline_run_select",
+            )
+            _choice = st.session_state.get("pipeline_run_select", LATEST_SENTINEL)
+            _rr = resolve_run_root_for_ui(PROJECT_ROOT, _choice)
+            if _rr is not None:
+                with st.expander("Provenance (corrida seleccionada)", expanded=False):
+                    _prov = read_provenance_dict(_rr)
+                    if _prov is not None:
+                        st.json(_prov)
+                    else:
+                        st.caption("No hay `provenance.json` en esta corrida.")
+                    st.caption(
+                        f"Token frescura Parquet limpio: `{clean_parquet_cache_token(_rr)}` · "
+                        f"`{(_rr / 'data' / 'perfiles_all.ctd_clean.parquet').resolve()}`"
+                    )
+        else:
+            st.caption("Sin corridas con `ctd_clean.parquet`. Ejecuta `python run/main.py` primero.")
+
+        st.markdown("### Pipeline (local)")
+        st.caption(
+            "Equivale a `python run/main.py` desde la raíz del repo. Requiere `data/processed/perfiles_all.csv`."
+        )
+        if st.button("Ejecutar pipeline ahora", key="btn_run_pipeline_main", help="Bloquea hasta terminar (típ. segundos–minutos)."):
+            import subprocess  # noqa: PLC0415
+
+            main_py = PROJECT_ROOT / "run" / "main.py"
+            with st.spinner("Ejecutando pipeline…"):
+                proc = subprocess.run(
+                    [sys.executable, str(main_py)],
+                    cwd=str(PROJECT_ROOT),
+                    capture_output=True,
+                    text=True,
+                    timeout=7200,
+                )
+            tail = (proc.stdout or "")[-6000:] + "\n--- stderr ---\n" + (proc.stderr or "")[-4000:]
+            st.code(tail or "(sin salida)", language="text")
+            if proc.returncode == 0:
+                st.success("Pipeline terminado. Recarga la página o revisa el selector de corrida.")
+            else:
+                st.error(f"Código de salida: {proc.returncode}")
+
         st.markdown("### Trazabilidad")
         st.caption(
-            "Cada arranque del visor deja constancia en un diario Markdown (apéndices), "
-            "con advertencias sobre limitaciones del análisis."
+            "Cada arranque del visor deja constancia en un diario Markdown (apéndices). "
+            "Elige la corrida arriba; el detalle de fuente está en **«Fuente de datos (corrida seleccionada)»** "
+            "en la página principal."
         )
         st.code("outputs/audit/registro_ejecuciones.md", language=None)
         st.caption("Ruta relativa al clon del repositorio en el servidor o puesto de trabajo.")
         st.markdown("### Costuras a vigilar")
         st.caption(
-            "Inferencias en CNV · cabeceras SBE · pocos meses para ATAC · "
-            "CSV vs CNV deben alinearse antes de informar."
+            "Serie mensual e interpolación a 5 m · pocos meses para ATAC · "
+            "coherencia de los Parquet con la metodología antes de informar."
         )
 
-    render_radiales_gijon()
+    render_radiales_cudillero()
 
 
 if __name__ == "__main__":

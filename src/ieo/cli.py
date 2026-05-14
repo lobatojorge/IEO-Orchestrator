@@ -6,9 +6,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from ieo.io.cnv_reader import CNVReader
 from ieo.io.excel_reader import ExcelReader
 from ieo.io.netcdf_reader import NetCDFReader
+from ieo.cudillero_paths import default_radial_csv_path
+from ieo.io.radial_csv_reader import RadialCsvReader
 from ieo.observability.anomaly import IsolationForestConfig, detect_anomalies_isolation_forest
 from ieo.observability.quality_summary import build_health_summary
 from ieo.reports.html_report import StepReport, write_step_report
@@ -18,41 +19,15 @@ from ieo.runtime.provenance import build_provenance, write_provenance_json
 from ieo.runtime.run_id import new_run_id
 from ieo.transform.pipeline import PipelineConfig, ReaderFactory, build_canonical_lazyframe, dataset_metrics, write_parquet
 from ieo.validation.radial_contract import ViolationSeverity, validate_canonical_ctd_polars
-from ieo.convert.seabird_hex_to_cnv import (
-    ConvertResult,
-    build_datcnvw_command_template,
-    convert_cast_sets,
-    discover_cast_sets,
-    resolve_datcnv_psa,
-    resolve_datcnvw_exe,
-    xmlcon_sensor_hints,
-)
 
 
 def _detect_sources(project_root: Path) -> list[Path]:
     """
-    Detecta fuentes de entrada para el pipeline.
-
-    Nota práctica:
-    - `data/cnv/` es el “punto de entrada” operativo del pipeline (fuentes procesables).
-    - `data/raw/` se reserva como backup de ficheros crudos del CTD (no se procesa automáticamente).
+    Entrada única: CSV radial Cudillero en `data/processed/perfiles_all.csv`.
+    No se escanea `data/raw/` (respaldo local, fuera del pipeline).
     """
-
-    allowed = (".cnv", ".xls", ".xlsx", ".nc", ".netcdf")
-    dirs = [
-        project_root / "data" / "cnv",
-    ]
-
-    sources: list[Path] = []
-    for d in dirs:
-        if not d.exists():
-            continue
-        for p in sorted(d.iterdir()):
-            if not p.is_file():
-                continue
-            if p.suffix.lower() in allowed:
-                sources.append(p)
-    return sources
+    p = default_radial_csv_path(project_root)
+    return [p] if p.is_file() else []
 
 
 def run_pipeline(*, project_root: Path) -> int:
@@ -60,8 +35,7 @@ def run_pipeline(*, project_root: Path) -> int:
     run_paths = RunPaths(project_root=project_root, run_id=run_id)
     run_paths.ensure()
 
-    raw_dir = project_root / "data" / "raw"
-    cnv_dir = project_root / "data" / "cnv"
+    csv_path = default_radial_csv_path(project_root)
 
     sources = _detect_sources(project_root)
     ingestion_errors: list[str] = []
@@ -71,11 +45,11 @@ def run_pipeline(*, project_root: Path) -> int:
             step_id="01_ingestion",
             title="01 · Ingesta (sin datos)",
             summary_lines=[
-                "No se encontraron fuentes compatibles en `data/cnv/`.",
-                "Copia ficheros `.cnv` (o `.xls/.xlsx` / `.nc`) en `data/cnv/` y reintenta.",
-                "Nota: `data/raw/` se usa como backup (no se procesa automáticamente).",
+                f"No existe el CSV radial esperado: `{csv_path}`.",
+                "Coloca `perfiles_all.csv` en `data/processed/`.",
+                "Nota: `data/raw/` no se lee en el pipeline (solo respaldo local).",
             ],
-            metrics={"raw_dir": str(raw_dir), "cnv_dir": str(cnv_dir), "n_sources": 0},
+            metrics={"csv_path": str(csv_path), "n_sources": 0},
             errors=[],
         )
         write_step_report(out_dir=run_paths.checkpoints_dir, report=report)
@@ -97,7 +71,7 @@ def run_pipeline(*, project_root: Path) -> int:
     write_provenance_json(run_paths.run_root / "provenance.json", prov)
 
     # Lectores
-    factory = ReaderFactory(cnv=CNVReader(), excel=ExcelReader(), netcdf=NetCDFReader())
+    factory = ReaderFactory(csv=RadialCsvReader(), excel=ExcelReader(), netcdf=NetCDFReader())
     config = PipelineConfig()
 
     # Ingesta y artefacto canónico por cada source
@@ -149,7 +123,7 @@ def run_pipeline(*, project_root: Path) -> int:
             title="01 · Ingesta (sin fuentes válidas)",
             summary_lines=[
                 "No se pudo generar ningún artefacto canónico CTD.",
-                "Asegúrate de que en `data/raw/` hay `.cnv` o un Excel CTD válido.",
+                f"Revisa el CSV (`{default_radial_csv_path(project_root)}`) y columnas mínimas (fecha, estación, profundidad, temperatura).",
             ],
             metrics={"n_sources": len(sources), "n_processed": 0, "n_errors": len(ingestion_errors)},
             errors=ingestion_errors,
@@ -279,35 +253,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="ieo", description="Pipeline IEO (producción)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    run = sub.add_parser("run", help="Ejecuta pipeline sobre data/cnv/")
+    run = sub.add_parser("run", help="Ejecuta pipeline sobre data/processed/perfiles_all.csv")
     run.add_argument("--project-root", type=str, default=str(Path(__file__).resolve().parents[2]))
-
-    conv = sub.add_parser("convert-cnv", help="Convierte Sea-Bird .hex/.xmlcon a .cnv (salida en data/cnv/)")
-    conv.add_argument("--project-root", type=str, default=str(Path(__file__).resolve().parents[2]))
-    conv.add_argument(
-        "--command-template",
-        type=str,
-        required=False,
-        default=None,
-        help=(
-            "Plantilla del comando externo. Placeholders: {hex} {xmlcon} {hdr} {bl} {out} {out_dir} {out_name} {stem} "
-            "{hex_name} {xmlcon_name}. Si se omite, se arma DatCnvW con /p apuntando a DatCnv.psa (batch sin GUI). "
-            "Ejemplo manual: '\"C:\\\\...\\\\DatCnvW.exe\" /p \"C:\\\\...\\\\DatCnv.psa\" /i \"{hex}\" ... /s'"
-        ),
-    )
-    conv.add_argument(
-        "--psa-path",
-        type=str,
-        default=None,
-        help="Ruta absoluta a DatCnv.psa (anula IEO_SEABIRD_DATCNV_PSA y tools/seabird/DatCnv.psa).",
-    )
-    conv.add_argument("--overwrite", action="store_true", help="Sobrescribe .cnv si ya existe.")
-    conv.add_argument("--timeout-s", type=int, default=600, help="Timeout por cast (segundos).")
-    conv.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="No ejecuta DatCnv: no crea .cnv (solo informe y salida por consola). Por defecto la conversión es real.",
-    )
     return p
 
 
@@ -316,169 +263,6 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.cmd == "run":
         return run_pipeline(project_root=Path(args.project_root).resolve())
-    if args.cmd == "convert-cnv":
-        project_root = Path(args.project_root).resolve()
-        raw_dir = project_root / "data" / "raw"
-        out_dir = project_root / "data" / "cnv"
-
-        run_id = new_run_id(prefix="convert-cnv")
-        run_paths = RunPaths(project_root=project_root, run_id=run_id)
-        run_paths.ensure()
-
-        casts = discover_cast_sets(raw_dir)
-
-        if not casts:
-            print(f"[ieo] Carpeta cruda: {raw_dir}", file=sys.stderr)
-            print(
-                "[ieo] No se encontró ningún cast: hace falta un par "
-                "`<mismo_nombre>.hex` + `<mismo_nombre>.xmlcon` en la misma carpeta (también bajo subcarpetas de data/raw).",
-                file=sys.stderr,
-            )
-            report = StepReport(
-                step_id="00_convert_cnv",
-                title="00 · Conversión a CNV (sin casts)",
-                summary_lines=[
-                    "No se encontraron conjuntos .hex + .xmlcon en `data/raw/`.",
-                    "Copia los ficheros del CTD y reintenta.",
-                ],
-                metrics={"raw_dir": str(raw_dir), "out_dir": str(out_dir), "n_casts": 0},
-                errors=[],
-            )
-            write_step_report(out_dir=run_paths.checkpoints_dir, report=report)
-            return 2
-
-        psa_override: Path | None = None
-        if args.psa_path:
-            psa_override = Path(str(args.psa_path)).expanduser().resolve()
-
-        datcnv_meta: dict[str, Any] = {}
-        if args.command_template:
-            cmd_template = str(args.command_template)
-        else:
-            try:
-                cmd_template = build_datcnvw_command_template(project_root, psa_override=psa_override)
-            except FileNotFoundError as exc:
-                print(f"[ieo] {exc}", file=sys.stderr)
-                report = StepReport(
-                    step_id="00_convert_cnv",
-                    title="00 · Conversión a CNV (sin DatCnvW)",
-                    summary_lines=[str(exc), "Define IEO_SEABIRD_DATCNVW o instala Sea-Bird SBE Data Processing."],
-                    metrics={"raw_dir": str(raw_dir), "out_dir": str(out_dir)},
-                    errors=[str(exc)],
-                )
-                write_step_report(out_dir=run_paths.checkpoints_dir, report=report)
-                return 3
-            except ValueError as exc:
-                if args.dry_run:
-                    print(f"[ieo] AVISO (dry-run): {exc}", file=sys.stderr)
-                    print("[ieo] No se ejecutará DatCnv; solo informe de casts.", file=sys.stderr)
-                    cmd_template = ""
-                    datcnv_meta = {}
-                else:
-                    print(str(exc), file=sys.stderr)
-                    report = StepReport(
-                        step_id="00_convert_cnv",
-                        title="00 · Conversión a CNV (sin DatCnv.psa)",
-                        summary_lines=[str(exc)],
-                        metrics={"raw_dir": str(raw_dir), "out_dir": str(out_dir)},
-                        errors=[str(exc)],
-                    )
-                    write_step_report(out_dir=run_paths.checkpoints_dir, report=report)
-                    return 4
-            try:
-                ex = resolve_datcnvw_exe()
-                ps = resolve_datcnv_psa(project_root=project_root, exe=ex, psa_override=psa_override)
-                datcnv_meta = {"datcnv_exe": str(ex), "datcnv_psa": str(ps) if ps else ""}
-            except Exception:
-                datcnv_meta = {}
-
-        print(f"[ieo] Carpeta cruda: {raw_dir}", file=sys.stderr)
-        print(f"[ieo] Salida .cnv: {out_dir}", file=sys.stderr)
-        print(
-            f"[ieo] Casts detectados: {len(casts)} (regla: mismo nombre base .hex + .xmlcon en la misma carpeta).",
-            file=sys.stderr,
-        )
-        for c in casts:
-            print(f"  · {c.stem}: {c.hex_path.name} + {c.xmlcon_path.name}", file=sys.stderr)
-        hints0 = xmlcon_sensor_hints(casts[0].xmlcon_path)
-        if hints0:
-            tail = ", ".join(hints0[:14])
-            if len(hints0) > 14:
-                tail += ", …"
-            print(
-                f"[ieo] Sensores declarados en {casts[0].xmlcon_path.name} (referencia; las columnas CNV las fija el .psa): {tail}",
-                file=sys.stderr,
-            )
-        if args.dry_run:
-            print(
-                "[ieo] ATENCIÓN: --dry-run activo: no se ejecutará DatCnvW.exe y no se escribirán .cnv.",
-                file=sys.stderr,
-            )
-        else:
-            print("[ieo] Ejecutando conversión real (DatCnvW).", file=sys.stderr)
-
-        if args.dry_run and not cmd_template:
-            results = [
-                ConvertResult(
-                    cast=c,
-                    out_cnv=out_dir / f"{c.stem}.cnv",
-                    ok=True,
-                    message="Dry-run (sin DatCnv.psa: no se construyó comando).",
-                    command=None,
-                )
-                for c in casts
-            ]
-        else:
-            results = convert_cast_sets(
-                casts,
-                out_dir=out_dir,
-                command_template=str(cmd_template),
-                overwrite=bool(args.overwrite),
-                timeout_s=int(args.timeout_s),
-                dry_run=bool(args.dry_run),
-            )
-
-        ok = [r for r in results if r.ok]
-        bad = [r for r in results if not r.ok]
-        print(f"[ieo] Resumen: OK={len(ok)} · fallos={len(bad)}", file=sys.stderr)
-        for r in bad:
-            print(f"  [!!] {r.cast.stem}: {r.message}", file=sys.stderr)
-        if not args.dry_run and not bad and ok:
-            print("[ieo] Ficheros .cnv esperados en data/cnv/ (mismo nombre base que el .hex).", file=sys.stderr)
-
-        summary = [
-            f"Detectados {len(results)} casts (con .hex + .xmlcon).",
-            f"Salidas en: {out_dir}",
-            f"OK: {len(ok)} · Fallos: {len(bad)}",
-            "Nota: este paso requiere un conversor Sea-Bird instalado (la plantilla de comando lo define).",
-        ]
-        errors = [f"{r.cast.stem}: {r.message}" for r in bad]
-        metrics: dict[str, Any] = {
-            "raw_dir": str(raw_dir),
-            "out_dir": str(out_dir),
-            "n_casts": len(results),
-            "n_ok": len(ok),
-            "n_fail": len(bad),
-            "dry_run": bool(args.dry_run),
-            "command_template": str(cmd_template)[:800],
-            **(datcnv_meta if not args.command_template else {}),
-        }
-        # Pequeña tabla legible (sin volcar stdout completo)
-        details = []
-        for r in results[:50]:
-            ts = r.cast.guess_timestamp_text() or "-"
-            details.append(f"- {r.cast.stem}: ts={ts} · out={r.out_cnv.name} · {r.message}")
-        report = StepReport(
-            step_id="00_convert_cnv",
-            title="00 · Conversión a CNV (Sea-Bird)",
-            summary_lines=summary + ["", *details],
-            metrics=metrics,
-            errors=errors,
-        )
-        write_step_report(out_dir=run_paths.checkpoints_dir, report=report)
-        logbook_path = write_logbook(run_root=run_paths.run_root, run_id=run_id.value)
-        print(f"[ieo] Cuaderno de bitácora: {logbook_path}", file=sys.stderr)
-        return 0 if not bad else 1
     raise RuntimeError("Comando no soportado")
 
 

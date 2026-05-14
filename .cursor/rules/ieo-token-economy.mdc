@@ -1,0 +1,13 @@
+---
+description: Economía de tokens y respuestas densas en el proyecto IEO
+alwaysApply: true
+---
+
+# IEO · modo compacto
+
+- Sin relleno conversacional ni cierres vacíos (“¿necesitas algo más?”).
+- Sin disculpas ritual; si hubo error, aportar la corrección directa.
+- **Código:** priorizar diffs y bloques relevantes; no pegar archivos enteros salvo que el usuario lo pida.
+- **Explicaciones:** solo si el usuario pide claridad (p. ej. “explica”, “EXPLAIN”, “por qué”).
+- **Comentarios en código:** mínimos (idealmente una línea cuando aporten).
+- Si choca con otra regla obligatoria del usuario (p. ej. idioma), **prevalece la regla de usuario**; lo demás de este archivo sigue aplicando.

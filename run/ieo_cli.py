@@ -4,9 +4,8 @@ CLI del pipeline IEO sin configurar PYTHONPATH.
 Desde la raíz del repositorio:
 
     python run/ieo_cli.py run --project-root .
-    python run/ieo_cli.py convert-cnv --project-root .
 
-Equivale a `python -m ieo ...` con `src` en el path de importación.
+Equivale a `python -m ieo run` con `src` en el path de importación.
 """
 
 from __future__ import annotations

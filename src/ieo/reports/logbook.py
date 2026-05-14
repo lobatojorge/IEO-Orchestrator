@@ -261,7 +261,6 @@ def _human_title(step_id: str, title: str) -> str:
 
 # Etiquetas cortas para el diagrama de flujo
 _FLOW_LABELS: dict[str, tuple[str, str]] = {
-    "00_convert_cnv":       ("📂", "Conversión\nSea-Bird"),
     "01_ingestion":         ("🔄", "Ingesta y\nnormalización"),
     "01_ingestion_skipped": ("⏭️", "Fuente\nomitida"),
     "02_anomalies":         ("🔍", "Control\nde calidad"),

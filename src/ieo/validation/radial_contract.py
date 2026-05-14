@@ -92,6 +92,32 @@ def _violations_sort_key(v: Violation) -> tuple[int, str]:
     return sev, v.code
 
 
+def _iter_monotonic_depth_segments(
+    z: np.ndarray,
+    v: np.ndarray,
+    *,
+    depth_reset_drop_m: float = 1.5,
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """
+    Parte un perfil ordenado por profundidad en segmentos donde z no «resetea» hacia arriba.
+
+    Si varios lances o perfiles se concatenan en el mismo grupo (p. ej. misma fecha gruesa),
+    al ordenar por z aparece un salto negativo grande (fondo de un lance → superficie del siguiente).
+    El test de gradiente vertical solo debe aplicarse dentro de cada tramo físico (z creciente).
+    """
+    if len(z) < 2:
+        return []
+    breaks = np.flatnonzero(np.diff(z) < -float(depth_reset_drop_m)) + 1
+    starts = np.concatenate(([0], breaks))
+    ends = np.concatenate((breaks, [len(z)]))
+    out: list[tuple[np.ndarray, np.ndarray]] = []
+    for s, e in zip(starts.tolist(), ends.tolist()):
+        if e - s < 2:
+            continue
+        out.append((z[s:e], v[s:e]))
+    return out
+
+
 def validate_profile_dataframe(
     df: pd.DataFrame,
     *,
@@ -107,7 +133,9 @@ def validate_profile_dataframe(
 
     - Rangos absolutos (temperatura / salinidad).
     - Por grupo de cast (acronimo+estación si existe): saltos grandes entre niveles
-      verticales adyacentes (detector burdo de inversión / datos corruptos).
+      verticales adyacentes (detector burdo de inversión / datos corruptos). Dentro de
+      cada grupo, si la profundidad «resetea» hacia arriba (varios lances concatenados),
+      se parte en segmentos monótonos antes de medir el gradiente.
     """
     th = thresholds or DEFAULT_THRESHOLDS
     kind = variable_kind or infer_variable_kind(col_value)
@@ -126,7 +154,11 @@ def validate_profile_dataframe(
             )
             return sorted(out, key=_violations_sort_key)
 
-    work = df[list(req) + [k for k in cast_keys if k in df.columns]].copy()
+    select_cols = list(req)
+    for k in cast_keys:
+        if k in df.columns and k not in select_cols:
+            select_cols.append(k)
+    work = df[select_cols].copy()
     work[col_prof] = pd.to_numeric(work[col_prof], errors="coerce")
     work[col_value] = pd.to_numeric(work[col_value], errors="coerce")
     work[col_estacion] = pd.to_numeric(work[col_estacion], errors="coerce")
@@ -171,11 +203,16 @@ def validate_profile_dataframe(
                 )
             )
 
-    # Gradientes verticales por cast
+    # Gradientes verticales por cast (misma columna temporal que el perfil si no hay acronimo/cast)
     gcols = [c for c in cast_keys if c in work.columns]
     if not gcols:
         work["_single_profile"] = 1
         gcols = ["_single_profile"]
+
+    n_prof_err = 0
+    n_prof_warn = 0
+    max_jump_err = 0.0
+    max_jump_warn = 0.0
 
     for _, g in work.groupby(gcols, dropna=False):
         gg = g.sort_values(col_prof)
@@ -183,33 +220,44 @@ def validate_profile_dataframe(
         v = gg[col_value].to_numpy(dtype=float)
         if len(z) < 2:
             continue
-        dz = np.diff(z)
-        dv = np.diff(v)
-        # Solo comparar niveles cercanos en profundidad (evita saltos por huecos enormes)
-        mask = dz <= 15.0  # m entre muestras adyacentes en tabla
-        if not np.any(mask):
-            continue
-        abs_dv = np.abs(dv[mask])
-        if kind == "temperature":
-            if np.any(abs_dv >= th.temp_adjacent_delta_error_c):
-                out.append(
-                    Violation(
-                        ViolationSeverity.ERROR,
-                        "temp_large_vertical_jump",
-                        "Al menos un salto vertical entre niveles adyacentes ≥ "
-                        f"{th.temp_adjacent_delta_error_c} °C (posible perfil corrupto o unidades).",
-                        {"max_adjacent_delta_c": float(np.max(abs_dv))},
-                    )
+        for zs, vs in _iter_monotonic_depth_segments(z, v):
+            dz = np.diff(zs)
+            dv = np.diff(vs)
+            # Solo pares con profundidad creciente y separación vertical acotada
+            mask = (dz > 0.0) & (dz <= 15.0)
+            if not np.any(mask):
+                continue
+            abs_dv = np.abs(dv[mask])
+            if kind == "temperature":
+                if np.any(abs_dv >= th.temp_adjacent_delta_error_c):
+                    n_prof_err += 1
+                    max_jump_err = max(max_jump_err, float(np.max(abs_dv)))
+                elif np.any(abs_dv >= th.temp_adjacent_delta_warn_c):
+                    n_prof_warn += 1
+                    max_jump_warn = max(max_jump_warn, float(np.max(abs_dv)))
+
+    if kind == "temperature":
+        if n_prof_err > 0:
+            out.append(
+                Violation(
+                    ViolationSeverity.ERROR,
+                    "temp_large_vertical_jump",
+                    f"{n_prof_err} perfil(es) con al menos un salto vertical (≤15 m entre muestras) "
+                    f"≥ {th.temp_adjacent_delta_error_c} °C (máximo observado {max_jump_err:.2f} °C). "
+                    "Revisar unidades, mezcla de lances o datos corruptos.",
+                    {"n_profiles": n_prof_err, "max_adjacent_delta_c": max_jump_err},
                 )
-            elif np.any(abs_dv >= th.temp_adjacent_delta_warn_c):
-                out.append(
-                    Violation(
-                        ViolationSeverity.WARNING,
-                        "temp_moderate_vertical_jump",
-                        "Saltos verticales moderados entre niveles adyacentes (revisar perfil/unidades).",
-                        {"max_adjacent_delta_c": float(np.max(abs_dv))},
-                    )
+            )
+        elif n_prof_warn > 0:
+            out.append(
+                Violation(
+                    ViolationSeverity.WARNING,
+                    "temp_moderate_vertical_jump",
+                    f"{n_prof_warn} perfil(es) con saltos verticales moderados (máximo {max_jump_warn:.2f} °C). "
+                    "Revisar perfil o unidades.",
+                    {"n_profiles": n_prof_warn, "max_adjacent_delta_c": max_jump_warn},
                 )
+            )
 
     return sorted(out, key=_violations_sort_key)
 
@@ -402,7 +450,15 @@ def validate_canonical_ctd_polars(
             )
         ]
 
-    ck: tuple[str, ...] = ("cast", "estacion") if "cast" in pdf.columns else ("estacion",)
+    if "cast" in pdf.columns:
+        ck: tuple[str, ...] = ("cast", col_estacion)
+    elif col_fecha in pdf.columns:
+        pdf = pdf.copy()
+        pdf["_qc_day"] = pd.to_datetime(pdf[col_fecha], errors="coerce").dt.normalize()
+        ck = ("_qc_day", col_estacion)
+    else:
+        ck = (col_estacion,)
+
     return validate_profile_dataframe(
         pdf,
         col_prof=col_prof,

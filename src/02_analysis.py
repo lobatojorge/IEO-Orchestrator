@@ -3,7 +3,8 @@ Módulo de Análisis y Pronóstico Operativo Oceánico (WGMLEARN)
 =============================================================
 
 Este script representa el componente `02_analysis.py` de la arquitectura ODA.
-Recoge los datos procesados/saneados por el Agente Inspector y aplica un
+Recoge datos tabulares ya procesados por el **pipeline IEO** (`run/main.py` → `src/ieo`)
+y aplica un
 modelado predictivo (Time Series Forecasting) para proyectar 5 años hacia
 el futuro, calculando intervalos de confianza (95%).
 
@@ -37,6 +38,10 @@ ATAC_FORECAST_MONTHS = 24
 ATAC_AR_CANDIDATES: tuple[int, ...] = (0, 1, 2)
 ATAC_SHORT_SERIES_MONTHS = 60
 ATAC_FORECAST_SHORT = 12
+# Marcos OLS: ~12 coef. (const + 11 meses + tendencia); series cortas recortan holdout antes que falle el visor.
+MARCS_HOLDOUT_MIN_TRAIN_OBS = 12
+# ATAC/SARIMAX sobre residuos del tramo previo al holdout (series cortas).
+ATAC_HOLDOUT_MIN_RESIDUAL_TRAIN = 10
 
 
 def monthly_bin_and_anomaly(
@@ -153,7 +158,7 @@ def decompose_marcos(
     X = sm.add_constant(X, has_constant="add")
     X = X.apply(pd.to_numeric, errors="coerce").astype(np.float64)
     mask = base["observation"].notna()
-    if int(mask.sum()) < 14:
+    if int(mask.sum()) < MARCS_HOLDOUT_MIN_TRAIN_OBS:
         return pd.DataFrame(), {}
 
     endog = pd.to_numeric(base.loc[mask, "observation"], errors="coerce").astype(np.float64)
@@ -197,7 +202,7 @@ def decompose_marcos_holdout_last_n(
     - Predice (tendencia+estacionalidad) para TODO el rango mensual continuo,
       incluyendo esos últimos meses (para compararlos contra bandas).
     """
-    holdout_months = int(max(1, holdout_months))
+    holdout_req = int(max(1, holdout_months))
 
     work = df[[col_fecha, col_y]].copy()
     work.columns = ["fecha", "y"]
@@ -224,13 +229,19 @@ def decompose_marcos_holdout_last_n(
     base.rename(columns={"y": "observation"}, inplace=True)
 
     obs_months = base.loc[base["observation"].notna(), "fecha"].to_list()
-    if len(obs_months) < (holdout_months + 14):
-        return pd.DataFrame(), {"error": "insufficient_observed_months", "n_obs_months": float(len(obs_months))}
+    n_obs = len(obs_months)
+    hm = min(holdout_req, max(1, n_obs - MARCS_HOLDOUT_MIN_TRAIN_OBS))
+    while hm >= 1 and n_obs < hm + MARCS_HOLDOUT_MIN_TRAIN_OBS:
+        hm -= 1
+    if hm < 1 or n_obs < MARCS_HOLDOUT_MIN_TRAIN_OBS + 1:
+        return pd.DataFrame(), {"error": "insufficient_observed_months", "n_obs_months": float(n_obs)}
 
-    cutoff = obs_months[-holdout_months]
+    cutoff = obs_months[-hm]
     train_mask = (base["fecha"] < cutoff) & base["observation"].notna()
-    if int(train_mask.sum()) < 14:
+    if int(train_mask.sum()) < MARCS_HOLDOUT_MIN_TRAIN_OBS:
         return pd.DataFrame(), {"error": "insufficient_train_points", "n_train": float(train_mask.sum())}
+
+    holdout_months = hm
 
     base["t_idx"] = np.arange(len(base), dtype=float)
     base["Trend"] = (base["t_idx"] + 1.0) / 12.0
@@ -295,7 +306,7 @@ def atac_holdout_bands_on_residuals(
 
     # Solo histórico de entrenamiento
     s_train = s[s.index < cutoff_holdout_start].dropna()
-    if len(s_train) < 20:
+    if len(s_train) < ATAC_HOLDOUT_MIN_RESIDUAL_TRAIN:
         return pd.DataFrame(), {"error": "insufficient_residual_train", "n_train": float(len(s_train))}
 
     full_idx = pd.date_range(s_train.index.min(), cutoff_holdout_start - pd.DateOffset(months=1), freq="MS")
@@ -936,12 +947,12 @@ def main():
     
     logger.info("Iniciando Previsión Operativa Oceánica (Time Series Forecasting)")
     
-    input_file = project_root / "data" / "processed" / "sireno_gijon_ctd_processed.csv"
-    output_file = project_root / "data" / "processed" / "sireno_gijon_ctd_forecast.csv"
+    input_file = project_root / "data" / "processed" / "perfiles_all.csv"
+    output_file = project_root / "data" / "processed" / "perfiles_all_forecast.csv"
     
     if not input_file.exists():
         logger.error(f"Archivo de entrada no encontrado: {input_file}")
-        logger.error("Asegúrese de ejecutar primero '01_agent_inspector.py'")
+        logger.error("Ejecute antes el pipeline IEO: `python run/main.py` (o `src/01_agent_inspector.py`, alias).")
         return
         
     df_processed = pd.read_csv(input_file)
