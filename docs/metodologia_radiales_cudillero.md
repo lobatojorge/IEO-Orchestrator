@@ -4,8 +4,6 @@ El proyecto [**RADIALES**](https://www.seriestemporales-ieo.net/) muestrea de fo
 * **Estación 2 · E2CU** (~130 m).
 * **Estación 3 · E3CU** (~850 m).
 
-Las coordenadas WGS84 para el mapa del visor están solo en metadatos al final de este archivo (no visibles en el texto); el visor las lee desde ahí.
-
 ### Instrumental (CTD)
 
 Perfilado vertical con **sonda CTD** y protocolos SIRENO habituales.

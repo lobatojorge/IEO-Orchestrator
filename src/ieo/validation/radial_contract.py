@@ -58,9 +58,17 @@ class RadialContractThresholds:
     # Salto entre dos meses consecutivos (misma estación, misma serie mensual)
     temp_month_delta_warn_c: float = 6.0
     temp_month_delta_error_c: float = 12.0
-    # Gradiente vertical entre niveles adyacentes ordenados por profundidad (por cast)
-    temp_adjacent_delta_warn_c: float = 4.0
-    temp_adjacent_delta_error_c: float = 8.0
+    # Gradiente vertical T: dos bandas de Δz (m) tras `temp_adjacent_min_dz_m` (ignora pares demasiado cercanos).
+    temp_adjacent_min_dz_m: float = 2.5
+    temp_adjacent_band_b_max_m: float = 5.0
+    temp_adjacent_max_dz_m: float = 15.0
+    temp_adjacent_delta_warn_band_b_c: float = 8.0
+    temp_adjacent_delta_error_band_b_c: float = 23.0
+    temp_adjacent_delta_warn_band_c_c: float = 10.0
+    temp_adjacent_delta_error_band_c_c: float = 24.0
+    # Compatibilidad / documentación (banda “fina” histórica ≈ Δz pequeño)
+    temp_adjacent_delta_warn_c: float = 5.0
+    temp_adjacent_delta_error_c: float = 10.0
     # Deriva: regresión mediana anual vs año (°C / año)
     temp_annual_median_slope_warn_per_year: float = 0.25
     temp_annual_median_slope_error_per_year: float = 0.6
@@ -223,18 +231,34 @@ def validate_profile_dataframe(
         for zs, vs in _iter_monotonic_depth_segments(z, v):
             dz = np.diff(zs)
             dv = np.diff(vs)
-            # Solo pares con profundidad creciente y separación vertical acotada
-            mask = (dz > 0.0) & (dz <= 15.0)
-            if not np.any(mask):
-                continue
-            abs_dv = np.abs(dv[mask])
+            min_dz = float(th.temp_adjacent_min_dz_m)
+            max_dz = float(th.temp_adjacent_max_dz_m)
+            b_max = float(th.temp_adjacent_band_b_max_m)
+            bands = (
+                ((dz >= min_dz) & (dz <= b_max), th.temp_adjacent_delta_error_band_b_c, th.temp_adjacent_delta_warn_band_b_c),
+                ((dz > b_max) & (dz <= max_dz), th.temp_adjacent_delta_error_band_c_c, th.temp_adjacent_delta_warn_band_c_c),
+            )
             if kind == "temperature":
-                if np.any(abs_dv >= th.temp_adjacent_delta_error_c):
+                seg_err = False
+                seg_warn = False
+                mx_e = 0.0
+                mx_w = 0.0
+                for m, e_lim, w_lim in bands:
+                    if not np.any(m):
+                        continue
+                    ad = np.abs(dv[m])
+                    if np.any(ad >= float(e_lim)):
+                        seg_err = True
+                        mx_e = max(mx_e, float(np.max(ad)))
+                    elif np.any(ad >= float(w_lim)):
+                        seg_warn = True
+                        mx_w = max(mx_w, float(np.max(ad)))
+                if seg_err:
                     n_prof_err += 1
-                    max_jump_err = max(max_jump_err, float(np.max(abs_dv)))
-                elif np.any(abs_dv >= th.temp_adjacent_delta_warn_c):
+                    max_jump_err = max(max_jump_err, mx_e)
+                elif seg_warn:
                     n_prof_warn += 1
-                    max_jump_warn = max(max_jump_warn, float(np.max(abs_dv)))
+                    max_jump_warn = max(max_jump_warn, mx_w)
 
     if kind == "temperature":
         if n_prof_err > 0:
@@ -242,8 +266,9 @@ def validate_profile_dataframe(
                 Violation(
                     ViolationSeverity.ERROR,
                     "temp_large_vertical_jump",
-                    f"{n_prof_err} perfil(es) con al menos un salto vertical (≤15 m entre muestras) "
-                    f"≥ {th.temp_adjacent_delta_error_c} °C (máximo observado {max_jump_err:.2f} °C). "
+                    f"{n_prof_err} perfil(es) con salto vertical T (Δz∈[{th.temp_adjacent_min_dz_m:g},{th.temp_adjacent_band_b_max_m:g}] m "
+                    f"≥{th.temp_adjacent_delta_error_band_b_c:g} °C, o Δz∈({th.temp_adjacent_band_b_max_m:g},{th.temp_adjacent_max_dz_m:g}] m "
+                    f"≥{th.temp_adjacent_delta_error_band_c_c:g} °C). Máximo observado {max_jump_err:.2f} °C. "
                     "Revisar unidades, mezcla de lances o datos corruptos.",
                     {"n_profiles": n_prof_err, "max_adjacent_delta_c": max_jump_err},
                 )
@@ -254,6 +279,8 @@ def validate_profile_dataframe(
                     ViolationSeverity.WARNING,
                     "temp_moderate_vertical_jump",
                     f"{n_prof_warn} perfil(es) con saltos verticales moderados (máximo {max_jump_warn:.2f} °C). "
+                    f"Avisos: Δz∈[{th.temp_adjacent_min_dz_m:g},{th.temp_adjacent_band_b_max_m:g}] m ≥{th.temp_adjacent_delta_warn_band_b_c:g} °C; "
+                    f"Δz>{th.temp_adjacent_band_b_max_m:g} m ≥{th.temp_adjacent_delta_warn_band_c_c:g} °C. "
                     "Revisar perfil o unidades.",
                     {"n_profiles": n_prof_warn, "max_adjacent_delta_c": max_jump_warn},
                 )
@@ -476,3 +503,39 @@ def format_violations_markdown(violations: list[Violation]) -> str:
         icon = "🔴" if v.severity == ViolationSeverity.ERROR else "🟠"
         lines.append(f"- {icon} **`{v.code}`** ({v.severity.value}): {v.message}")
     return "\n".join(lines) if lines else "_Sin incidencias._"
+
+
+def format_contract_warning_postchart(v: Violation) -> str:
+    """
+    Texto breve para avisos WARNING tras la gráfica (evita interpretarlos como fallo de datos).
+    """
+    d = v.details or {}
+    if v.code == "temp_window_median_shift":
+        yl = d.get("years_last") or []
+        yp = d.get("years_prev") or []
+        delta = d.get("delta_c")
+        est = d.get("estacion", "?")
+        if yl and yp and delta is not None:
+            yi_l = [int(x) for x in yl]
+            yi_p = [int(x) for x in yp]
+
+            def _span(years: list[int]) -> str:
+                return f"{min(years)}–{max(years)}" if len(years) > 1 else str(years[0])
+
+            diff_f = float(delta)
+            sym = "↓" if diff_f < 0 else "↑"
+            return (
+                f"**Temperatura {_span(yi_l)} vs {_span(yi_p)} (est. {est}):** "
+                f"{sym} {abs(diff_f):.2f} °C en la mediana anual del trieno reciente. "
+                "*Puede reflejar variabilidad climática, no es un fallo de medición.*"
+            )
+    if v.code in ("temp_annual_median_trend", "temp_annual_median_trend_extreme"):
+        slope = d.get("slope_c_per_year")
+        est = d.get("estacion", "?")
+        if slope is not None:
+            return (
+                f"**Tendencia larga (estación {est}):** mediana anual cambia ~**{float(slope):+.3f} °C/año**. "
+                "Puede ser real o mezcla de fuentes; no es un fallo automático de datos."
+            )
+    # Genérico, sin icono emoji (más sobrio en Streamlit)
+    return f"**`{v.code}`** · {v.message}"

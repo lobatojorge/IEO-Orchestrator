@@ -9,6 +9,7 @@ import polars as pl
 
 from ieo.cudillero_paths import default_radial_csv_path  # reexport API estable
 from ieo.io.base import ReadResult
+from ieo.radiales_catalog import identify_radial
 
 
 def _lower_columns(lf: pl.LazyFrame) -> pl.LazyFrame:
@@ -87,6 +88,11 @@ class RadialCsvReader:
         lf = _lower_columns(lf)
         lf = _ensure_fecha(lf)
         lf = _ensure_cast(lf, source=source)
+        lf = lf.with_columns(
+            pl.col("cast")
+            .map_elements(identify_radial, return_dtype=pl.Utf8)
+            .alias("radial_id")
+        )
 
         cols = lf.collect_schema().names()
         handoff = {

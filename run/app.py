@@ -72,6 +72,98 @@ st.set_page_config(
     page_icon=str(RUN_DIR / "assets" / "logo.webp"),
 )
 
+# ── Google Fonts + CSS global (Dark Abyss — tokens del portfolio datastur) ──
+st.markdown(
+    """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/icon?family=Material+Icons');
+
+/* Fuentes base */
+html, body, [class*="css"], .stMarkdown, .stText, p, div, span, li {
+    font-family: 'Plus Jakarta Sans', sans-serif !important;
+}
+code, pre, .mono, kbd {
+    font-family: 'JetBrains Mono', monospace !important;
+}
+
+/* Tokens Dark Abyss en componentes Streamlit no cubiertos por config.toml */
+section[data-testid="stSidebar"] {
+    background-color: #0E1626 !important;
+    border-right: 1px solid rgba(255,255,255,0.07) !important;
+}
+.stTabs [data-baseweb="tab-list"] {
+    background-color: #080D16 !important;
+    gap: 4px;
+}
+.stTabs [data-baseweb="tab"] {
+    background-color: #0E1626 !important;
+    border: 1px solid rgba(255,255,255,0.07) !important;
+    border-radius: 6px 6px 0 0 !important;
+    color: #A8BBCF !important;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+.stTabs [aria-selected="true"] {
+    background-color: #162033 !important;
+    color: #E2EAF4 !important;
+    border-bottom-color: #080D16 !important;
+}
+/* Botones primarios → acento #00BFFF */
+.stButton button[kind="primary"] {
+    background-color: #00BFFF !important;
+    color: #080D16 !important;
+    font-weight: 700 !important;
+    border: none !important;
+}
+.stButton button[kind="secondary"] {
+    background-color: #0E1626 !important;
+    color: #A8BBCF !important;
+    border: 1px solid rgba(255,255,255,0.12) !important;
+}
+.stButton button[kind="secondary"]:hover {
+    border-color: rgba(0,191,255,0.35) !important;
+    color: #E2EAF4 !important;
+}
+/* Expanders */
+details[data-testid="stExpander"] summary {
+    color: #A8BBCF !important;
+    font-size: 0.83rem !important;
+    font-weight: 600 !important;
+}
+/* Evitar solapamiento del icono nativo con el contenido del expander */
+details[data-testid="stExpander"] > div[data-testid="stExpanderDetails"] {
+    padding-top: 10px !important;
+}
+/* Asegurar que Material Icons se renderice como icono, no como texto */
+.material-icons {
+    font-family: 'Material Icons' !important;
+    font-size: 20px !important;
+}
+/* Texto secundario Streamlit */
+.stCaption, small { color: #5B7FA3 !important; }
+/* Separadores */
+hr { border-color: rgba(255,255,255,0.07) !important; }
+/* Ocultar botón nativo de colapso de sidebar */
+[data-testid="collapsedControl"], [data-testid="stSidebarCollapsedControl"] {
+    display: none !important;
+}
+/* Ocultar barra de herramientas de Streamlit (Deploy, menú) */
+[data-testid="stToolbar"],
+[data-testid="stDecoration"],
+[data-testid="stStatusWidget"],
+#MainMenu,
+header[data-testid="stHeader"] {
+    display: none !important;
+}
+/* Eliminar padding top que Streamlit añade para la toolbar */
+.stApp > header { display: none !important; }
+.block-container { padding-top: 1.5rem !important; }
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
 import pandas as pd
 import plotly.graph_objects as go
 import markdown
@@ -147,7 +239,6 @@ def load_methodology(product_id: str) -> str:
     )
 
 
-@st.cache_data(show_spinner=False)
 def _cached_cudillero_methodology_text() -> str:
     if METODOLOGIA_RADIALES_CUDILLERO_MD.exists():
         try:
@@ -182,9 +273,9 @@ def parse_radial_station_coords_from_methodology(md_text: str) -> list[dict[str,
     )
     if block3:
         return [
-            {"estacion": 1, "lat": float(block3.group(1)), "lon": float(block3.group(2)), "nombre": "E1 · E1CU"},
-            {"estacion": 2, "lat": float(block3.group(3)), "lon": float(block3.group(4)), "nombre": "E2 · E2CU"},
-            {"estacion": 3, "lat": float(block3.group(5)), "lon": float(block3.group(6)), "nombre": "E3 · E3CU"},
+            {"estacion": 1, "lat": float(block3.group(1)), "lon": float(block3.group(2)), "nombre": "E1CU"},
+            {"estacion": 2, "lat": float(block3.group(3)), "lon": float(block3.group(4)), "nombre": "E2CU"},
+            {"estacion": 3, "lat": float(block3.group(5)), "lon": float(block3.group(6)), "nombre": "E3CU"},
         ]
 
     dms_pat = re.compile(
@@ -241,7 +332,7 @@ def build_cudillero_radial_map_figure(stations: list[dict[str, float | int | str
 
     if stations:
         # Profundidades nominales por estación (para tooltip y color)
-        _DEPTH_LABELS = {1: "~65 m · E1CU", 2: "~130 m · E2CU", 3: "~850 m · E3CU", 4: "Estación 4"}
+        _DEPTH_LABELS = {1: "E1CU", 2: "E2CU", 3: "E3CU", 4: "E4CU"}
         # Gradiente azul claro → azul marino por profundidad
         _DEPTH_COLORS = ["#5ea8d4", "#2b6cb0", "#1a3f6f", "#0c1f3f"]
 
@@ -296,51 +387,112 @@ def build_cudillero_radial_map_figure(stations: list[dict[str, float | int | str
     return fig
 
 
-def _render_data_governance_card() -> None:
+def _render_pipeline_provenance_banner(
+    n_clean: int,
+    n_anom: int,
+    fecha_min: str,
+    fecha_max: str,
+) -> None:
     """
-    Sello breve de gobernanza: cadena de procesado en lenguaje llano.
-    Usa componentes nativos Streamlit para evitar problemas de escaping HTML.
+    Cuatro tarjetas de proveniencia: comunican que los datos han pasado por un pipeline
+    de ingesta, auditoría, QC y análisis antes de llegar al visor.
     """
-    st.markdown(
-        "<span style='padding:3px 11px;border-radius:999px;background:#1e3a5f;color:#fff;"
-        "font-size:0.75rem;font-weight:700;letter-spacing:0.05em;'>IEO · RADIALES</span>"
-        "&nbsp;&nbsp;<span style='font-size:0.82rem;color:#475569;'>"
-        "Datos procesados bajo protocolo automatizado de control de calidad</span>",
-        unsafe_allow_html=True,
+    pct_clean = round(100.0 * n_clean / max(n_clean + n_anom, 1))
+
+    _SVG_ATTRS = "width='22' height='22' viewBox='0 0 24 24' fill='none' stroke='#00BFFF' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'"
+    _SVG_ANCHOR = (
+        f"<svg {_SVG_ATTRS}>"
+        "<circle cx='12' cy='5' r='3'/>"
+        "<line x1='12' y1='8' x2='12' y2='22'/>"
+        "<path d='M5 15H2a10 10 0 0 0 20 0h-3'/>"
+        "</svg>"
     )
-    pasos = [
-        ("📄", "Parquet pipeline", "ctd_clean + anomalías", False),
-        ("🔄", "Normalización", "formato canónico", False),
-        ("🔍", "Control QC", "cuarentena si anomalía", False),
-        ("📈", "Análisis", "Marcos + ATAC", False),
-        ("🖥️", "Visor", "resultado final", True),
+    _SVG_CHECK = (
+        f"<svg {_SVG_ATTRS}>"
+        "<circle cx='12' cy='12' r='10'/>"
+        "<path d='m9 12 2 2 4-4'/>"
+        "</svg>"
+    )
+    _SVG_ALERT = (
+        f"<svg {_SVG_ATTRS} stroke='#f59e0b'>"
+        "<path d='m21.73 18-8-14a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 22h16a2 2 0 0 0 1.73-4Z'/>"
+        "<line x1='12' y1='9' x2='12' y2='13'/>"
+        "<line x1='12' y1='17' x2='12.01' y2='17'/>"
+        "</svg>"
+    )
+    _SVG_ACTIVITY = (
+        f"<svg {_SVG_ATTRS}>"
+        "<path d='M22 12h-4l-3 9L9 3l-3 9H2'/>"
+        "</svg>"
+    )
+
+    items = [
+        (
+            _SVG_ANCHOR,
+            "Ingesta estandarizada",
+            "Perfiles oceánicos en formato canónico. Columnas normalizadas, fechas "
+            "validadas, radial identificada automáticamente (E1CU · E2CU · E3CU).",
+        ),
+        (
+            _SVG_CHECK,
+            f"Datos validados · {pct_clean}\u202f%",
+            f"{n_clean:,}\u202fregistros pasan el control de calidad. "
+            f"{n_anom:,}\u202fvalores atípicos quedan segregados y trazables, nunca eliminados.",
+        ),
+        (
+            _SVG_ALERT,
+            "Detección de anomalías",
+            "Isolation Forest multivariante (T, S, profundidad) con semilla fija. "
+            "Reproducible entre corridas.",
+        ),
+        (
+            _SVG_ACTIVITY,
+            "Análisis temporal · ATAC",
+            f"Serie mensual {fecha_min}\u2013{fecha_max}. "
+            "Descomposición Marcos + pronóstico AR con bandas de tolerancia.",
+        ),
     ]
-    cols = st.columns(len(pasos) * 2 - 1)
-    for i, (icono, titulo, subtitulo, destacado) in enumerate(pasos):
-        col_idx = i * 2
-        bg = "#e8f0fb" if destacado else "#ffffff"
-        border = "#1e3a5f" if destacado else "#dde3ea"
-        color_titulo = "color:#1e3a5f;" if destacado else ""
-        with cols[col_idx]:
-            st.markdown(
-                f"<div style='text-align:center;padding:10px 8px;border-radius:8px;"
-                f"background:{bg};border:1px solid {border};'>"
-                f"<div style='font-size:1.1rem;'>{icono}</div>"
-                f"<div style='font-size:0.72rem;font-weight:600;margin-top:2px;{color_titulo}'>{titulo}</div>"
-                f"<div style='font-size:0.68rem;color:#64748b;'>{subtitulo}</div>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-        if i < len(pasos) - 1:
-            with cols[col_idx + 1]:
-                st.markdown(
-                    "<div style='text-align:center;padding-top:18px;color:#94a3b8;font-size:1rem;'>→</div>",
-                    unsafe_allow_html=True,
-                )
-    st.caption(
-        "Este visor muestra resultados ya validados. "
-        "No sustituye el informe científico firmado ni la auditoría del instrumental de campaña."
+
+    parts = "".join(
+        f"<div style='"
+        f"border:1px solid rgba(255,255,255,0.07);"
+        f"border-top:2px solid #00BFFF;"
+        f"border-radius:8px;"
+        f"padding:14px 16px 12px;"
+        f"background:#0E1626;"
+        f"display:flex;flex-direction:column;gap:8px;"
+        f"'>"
+        f"<div style='margin-bottom:2px;line-height:1;'>{icon}</div>"
+        f"<div style='"
+        f"font-size:0.65rem;"
+        f"font-weight:700;"
+        f"text-transform:uppercase;"
+        f"letter-spacing:0.1em;"
+        f"color:#5B7FA3;"
+        f"'>{title}</div>"
+        f"<div style='"
+        f"font-size:0.74rem;"
+        f"color:#A8BBCF;"
+        f"line-height:1.6;"
+        f"'>{body}</div>"
+        f"</div>"
+        for icon, title, body in items
     )
+    grid_html = (
+        "<div style='display:grid;grid-template-columns:repeat(4,1fr);gap:10px;"
+        "margin-top:10px;margin-bottom:12px;'>"
+        + parts
+        + "</div>"
+        "<p style='font-size:0.68rem;color:#5B7FA3;margin:0;"
+        "font-family:\"JetBrains Mono\",monospace;'>"
+        "Visor de resultados validados · no sustituye el informe científico firmado."
+        "</p>"
+    )
+    st.markdown(grid_html, unsafe_allow_html=True)
+
+
+def _render_data_governance_card() -> None:
+    pass  # sustituida por _render_pipeline_provenance_banner (se llama con datos reales)
 
 
 # ---------------------------------------------------------------------------
@@ -355,88 +507,211 @@ def load_cudillero_pipeline_viewer(run_root_str: str, cache_token: str) -> Pipel
     return load_pipeline_viewer_data(Path(run_root_str))
 
 
-def _render_isolation_forest_tab(pipe: PipelineViewerLoadResult) -> None:
-    st.subheader("Revisión Isolation Forest")
-    st.caption(
-        f"run_id `{pipe.run_root.name}` · Parquet anomalías: `{pipe.run_root / 'data' / 'perfiles_all.ctd_anomalies.parquet'}`"
-    )
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Filas limpias", f"{len(pipe.df_clean):,}")
-    c2.metric("Filas anómalas", f"{len(pipe.df_anomalies):,}")
-    c3.metric("Total (viz)", f"{len(pipe.df_concat_viz):,}")
+# ---------------------------------------------------------------------------
+# Hitos del investigador
+# ---------------------------------------------------------------------------
 
-    show_cols = [
-        c
-        for c in (
-            "fecha",
-            "estacion",
-            "cast",
-            pipe.col_prof,
-            pipe.col_temp,
-            pipe.col_sal,
-            "anomaly_score",
-            "run_id",
-            "source_file",
-            "row_id",
-        )
-        if c in pipe.df_anomalies.columns
-    ]
-    if pipe.df_anomalies.empty:
-        st.info("Isolation Forest no marcó ninguna fila como anómala en esta corrida.")
+
+def _render_investigator_highlights(res: object, var_unt: str) -> None:  # type: ignore[type-arg]
+    """
+    Columna derecha del layout Q&A: 5 mini-cards con hitos de la serie temporal
+    calculados desde res.pipe (DataFrame) y res.meta (dict).
+    """
+    pipe = res.pipe  # type: ignore[attr-defined]
+    meta = res.meta  # type: ignore[attr-defined]
+
+    obs = pipe["observation"].dropna()
+    is_holdout_col = pipe["is_holdout"]
+    fitted_train = pipe.loc[is_holdout_col == False, "fitted"].dropna()  # noqa: E712
+
+    # 1. Rango histórico
+    if len(obs) >= 2:
+        rango_stat = f"{float(obs.min()):.1f}–{float(obs.max()):.1f} {var_unt}"
+        rango_body = "Rango completo de valores observados en la serie."
+        rango_accent = "#00BFFF"
     else:
-        st.dataframe(
-            pipe.df_anomalies[show_cols] if show_cols else pipe.df_anomalies,
-            use_container_width=True,
-            height=min(400, 120 + 28 * len(pipe.df_anomalies)),
+        rango_stat, rango_body, rango_accent = "—", "Datos insuficientes.", "#5B7FA3"
+
+    # 2. Amplitud estacional (peak-to-trough del ajuste en entrenamiento)
+    if len(fitted_train) > 12:
+        amp = float(fitted_train.max() - fitted_train.min())
+        amp_stat = f"Δ {amp:.1f} {var_unt}"
+        amp_body = "Diferencia máx.–mín. del ciclo estacional modelado (entrenamiento)."
+        amp_accent = "#00BFFF"
+    else:
+        amp_stat, amp_body, amp_accent = "—", "Muestra insuficiente.", "#5B7FA3"
+
+    # 3. Tendencia lineal
+    slope = meta.get("slope_c_per_year") or meta.get("trend_slope")
+    if slope is None and len(fitted_train) >= 24:
+        x = np.arange(len(fitted_train), dtype=float)
+        slope = float(np.polyfit(x, fitted_train.to_numpy(dtype=float), 1)[0]) * 12
+    if slope is not None:
+        slope_f = float(slope)
+        sym = "↑" if slope_f > 0 else "↓"
+        trend_stat = f"{sym} {abs(slope_f):.3f} {var_unt}/año"
+        trend_body = "Pendiente lineal estimada del ajuste (período de entrenamiento)."
+        trend_accent = "#f59e0b" if abs(slope_f) > 0.05 else "#22c55e"
+    else:
+        trend_stat, trend_body, trend_accent = "—", "No disponible.", "#5B7FA3"
+
+    # 4. Observaciones del holdout fuera de la banda 95 %
+    holdout_obs = pipe.loc[(is_holdout_col == True) & pipe["observation"].notna()]  # noqa: E712
+    n_holdout = len(holdout_obs)
+    n_out = 0
+    if n_holdout > 0 and "temp_fc_lo_95" in pipe.columns and "temp_fc_hi_95" in pipe.columns:
+        out_mask = (holdout_obs["observation"] < holdout_obs["temp_fc_lo_95"]) | (
+            holdout_obs["observation"] > holdout_obs["temp_fc_hi_95"]
+        )
+        n_out = int(out_mask.sum())
+    pct_out = round(100 * n_out / max(n_holdout, 1)) if n_holdout > 0 else 0
+    out_accent = "#22c55e" if pct_out == 0 else "#f59e0b" if pct_out < 30 else "#ef4444"
+    out_stat = f"{n_out} / {n_holdout}" if n_holdout > 0 else "—"
+    _holdout_label = f"últimos {n_holdout} meses" if n_holdout > 0 else "validación"
+    out_body = (
+        f"{pct_out}\u202f% fuera de la banda 95\u202f% en los {_holdout_label}."
+        if n_holdout > 0
+        else "Sin período de validación disponible."
+    )
+
+    # 5. Dato más reciente
+    last_obs_rows = pipe.loc[pipe["observation"].notna()]
+    if len(last_obs_rows) > 0:
+        last_row = last_obs_rows.iloc[-1]
+        last_val = float(last_row["observation"])
+        last_date = pd.to_datetime(last_row["fecha"]).strftime("%b %Y")
+        last_stat = f"{last_val:.2f} {var_unt}"
+        last_body = f"Última observación registrada: {last_date}."
+        last_accent = "#1a9aff"
+    else:
+        last_stat, last_body, last_accent = "—", "Sin datos.", "#5B7FA3"
+
+    # SVG icons (18 px, stroke-only)
+    _s = (
+        "width='18' height='18' viewBox='0 0 24 24' fill='none' "
+        "stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'"
+    )
+    _icon_range = f"<svg {_s}><line x1='3' y1='6' x2='21' y2='6'/><line x1='3' y1='12' x2='21' y2='12'/><line x1='3' y1='18' x2='21' y2='18'/></svg>"
+    _icon_wave = f"<svg {_s}><path d='M2 12c2-4 4-4 6 0s4 4 6 0 4-4 6 0'/></svg>"
+    _icon_trend = f"<svg {_s}><polyline points='22 7 13.5 15.5 8.5 10.5 2 17'/><polyline points='16 7 22 7 22 13'/></svg>"
+    _icon_band = f"<svg {_s}><circle cx='12' cy='12' r='10'/><line x1='12' y1='8' x2='12' y2='12'/><line x1='12' y1='16' x2='12.01' y2='16'/></svg>"
+    _icon_last = f"<svg {_s}><circle cx='12' cy='12' r='1'/><path d='M20.2 20.2c2.04-2.03.02-7.36-4.5-11.9C11.2 3.8 5.9 1.8 3.8 3.8-2.04 5.83 7.98 15.36 8 15.9'/></svg>"
+
+    def _hi_card(icon: str, label: str, stat: str, body: str, accent: str) -> str:
+        return (
+            f"<div style='background:#0A1220;border-radius:10px;padding:12px 14px;"
+            f"border-top:2px solid {accent};'>"
+            f"<div style='display:flex;align-items:center;gap:6px;margin-bottom:4px;'>"
+            f"<span style='color:{accent};line-height:1;'>{icon}</span>"
+            f"<span style='font-size:0.57rem;font-weight:700;text-transform:uppercase;"
+            f"letter-spacing:0.12em;color:#5B7FA3;'>{label}</span>"
+            f"</div>"
+            f"<div style='font-family:\"JetBrains Mono\",monospace;font-size:0.92rem;"
+            f"font-weight:700;color:{accent};margin-bottom:3px;'>{stat}</div>"
+            f"<div style='font-size:0.67rem;color:#A8BBCF;line-height:1.45;'>{body}</div>"
+            f"</div>"
         )
 
-    viz = pipe.df_concat_viz
-    if viz.empty or "estacion" not in viz.columns:
-        st.warning("Sin datos de visualización.")
-        return
-    ids = sorted({int(float(x)) for x in viz["estacion"].dropna().unique().tolist()})
-    if not ids:
-        st.warning("Sin datos de visualización.")
-        return
-    est_pick = st.selectbox("Estación (perfil T–z)", options=ids, key="if_tab_estacion_tz")
-    sub = viz[viz["estacion"].astype(float) == float(est_pick)].copy()
-    if sub.empty:
-        st.warning("Sin filas para esa estación.")
-        return
-    fig = go.Figure()
-    for flag, lab, col in [
-        (False, "Limpio (IF)", "#2E86AB"),
-        (True, "Anomalía IF", "#C1121F"),
-    ]:
-        s = sub[sub["_viewer_anomaly"] == flag]
-        if s.empty:
-            continue
-        fig.add_trace(
-            go.Scatter(
-                x=s[pipe.col_temp],
-                y=s[pipe.col_prof],
-                mode="markers",
-                name=lab,
-                marker=dict(size=6, color=col, opacity=0.75),
-                text=s["fecha"].astype(str),
-                hovertemplate="T=%{x:.3f} °C<br>z=%{y:.1f} m<br>%{text}<extra></extra>",
-            )
-        )
-    fig.update_layout(
-        title=f"Temperatura vs profundidad · estación {est_pick}",
-        xaxis_title="T (°C)",
-        yaxis_title="Profundidad (m)",
-        yaxis_autorange="reversed",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02),
-        height=520,
-        margin=dict(l=48, r=24, t=56, b=48),
+    cards = (
+        _hi_card(_icon_range, "Rango histórico", rango_stat, rango_body, rango_accent)
+        + _hi_card(_icon_wave, "Amplitud estacional", amp_stat, amp_body, amp_accent)
+        + _hi_card(_icon_trend, "Tendencia", trend_stat, trend_body, trend_accent)
+        + _hi_card(_icon_band, "Pronóstico vs obs.", out_stat, out_body, out_accent)
+        + _hi_card(_icon_last, "Último dato", last_stat, last_body, last_accent)
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.markdown(
+        "<p style='font-size:0.65rem;font-family:\"JetBrains Mono\",monospace;font-weight:700;"
+        "text-transform:uppercase;letter-spacing:0.18em;color:#00BFFF;"
+        "margin:20px 0 10px;border-top:1px solid rgba(255,255,255,0.07);padding-top:16px;'>"
+        "Hitos de la serie</p>"
+        f"<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;'>"
+        + cards
+        + "</div>",
+        unsafe_allow_html=True,
+    )
 
 
 # ---------------------------------------------------------------------------
 # Vistas
 # ---------------------------------------------------------------------------
+
+
+@st.cache_data(show_spinner="Agregando serie mensual por profundidad…")
+def _monthly_value_at_depth(
+    df: pd.DataFrame,
+    col_fecha: str,
+    col_prof: str,
+    col_value: str,
+    col_estacion: str,
+    target_depth_m: float,
+) -> tuple[pd.DataFrame, dict[str, float | int]]:
+    """Interpola ``col_value`` a ``target_depth_m`` por lance y agrega media mensual por estación."""
+    use_cols = [col_fecha, col_prof, col_value, col_estacion] + (["acronimo"] if "acronimo" in df.columns else [])
+    work = df[use_cols].copy()
+    work[col_fecha] = pd.to_datetime(work[col_fecha], errors="coerce")
+    work[col_prof] = pd.to_numeric(work[col_prof], errors="coerce")
+    work[col_value] = pd.to_numeric(work[col_value], errors="coerce")
+    work[col_estacion] = pd.to_numeric(work[col_estacion], errors="coerce")
+    work = work.dropna(subset=[col_fecha, col_prof, col_value, col_estacion])
+    if work.empty:
+        return pd.DataFrame(), {
+            "n_casts": 0,
+            "n_casts_con_valor": 0,
+            "n_casts_sin_cobertura_en_profundidad": 0,
+            "profundidad_objetivo_m": int(target_depth_m) if target_depth_m == int(target_depth_m) else target_depth_m,
+        }
+
+    if "acronimo" in work.columns:
+        group_keys = ["acronimo", col_estacion]
+    else:
+        work["_fecha_d"] = work[col_fecha].dt.date
+        group_keys = ["_fecha_d", col_estacion]
+
+    def _interp_value(profile: pd.DataFrame) -> float:
+        dft = (
+            pd.DataFrame({"z": profile[col_prof].to_numpy(dtype=float), "v": profile[col_value].to_numpy(dtype=float)})
+            .dropna()
+            .groupby("z", as_index=False)["v"]
+            .mean()
+            .sort_values("z")
+        )
+        if dft.empty:
+            return float("nan")
+        z = dft["z"].to_numpy(dtype=float)
+        v = dft["v"].to_numpy(dtype=float)
+        if target_depth_m < float(z[0]) or target_depth_m > float(z[-1]):
+            return float("nan")
+        return float(np.interp(target_depth_m, z, v))
+
+    per_cast = (
+        work.groupby(group_keys, as_index=False)
+        .apply(
+            lambda g: pd.Series(
+                {
+                    "fecha": pd.to_datetime(g[col_fecha].iloc[0]).to_period("M").to_timestamp(how="start"),
+                    "valor_prof": _interp_value(g),
+                }
+            ),
+            include_groups=False,
+        )
+        .reset_index(drop=True)
+    )
+    n_casts = int(len(per_cast))
+    n_valid = int(per_cast["valor_prof"].notna().sum())
+    diag: dict[str, float | int] = {
+        "n_casts": n_casts,
+        "n_casts_con_valor": n_valid,
+        "n_casts_sin_cobertura_en_profundidad": n_casts - n_valid,
+        "profundidad_objetivo_m": int(target_depth_m) if target_depth_m == int(target_depth_m) else target_depth_m,
+    }
+
+    per_cast = per_cast.dropna(subset=["valor_prof", "fecha"])
+    if per_cast.empty:
+        return pd.DataFrame(), diag
+
+    agg = per_cast.groupby([col_estacion, "fecha"], as_index=False)["valor_prof"].mean()
+    agg = agg.loc[:, [col_estacion, "fecha", "valor_prof"]]
+    return agg.sort_values([col_estacion, "fecha"]).reset_index(drop=True), diag
 
 
 def render_radiales_cudillero() -> None:
@@ -445,9 +720,7 @@ def render_radiales_cudillero() -> None:
     if "estacion_seleccionada_csv" not in st.session_state:
         st.session_state["estacion_seleccionada_csv"] = 1
 
-    st.header("Radiales Cudillero")
     _rc = _load_radial_contract_mod()
-    _render_data_governance_card()
 
     valid_runs = list_valid_run_roots(PROJECT_ROOT)
     if not valid_runs:
@@ -466,131 +739,149 @@ def render_radiales_cudillero() -> None:
         st.warning("No hay datos procesados en el sistema. Ejecuta el pipeline principal primero.")
         st.stop()
 
-    with st.expander("Fuente de datos (corrida seleccionada)", expanded=False):
-        st.markdown(
-            f"- **run_id:** `{pipe.run_root.name}`\n"
-            f"- **Parquet limpio:** `{pipe.clean_parquet}`\n"
-            f"- **Filas limpias:** {len(pipe.df_clean):,} · **Filas anómalas (IF):** {len(pipe.df_anomalies):,}"
-        )
-        fc = pipe.df_clean["fecha"].dropna()
-        if len(fc):
-            st.caption(f"Rango fechas (limpias): **{fc.min().date()}** → **{fc.max().date()}**")
-        else:
-            st.caption("Sin fechas válidas en el conjunto limpio.")
-
     md_method = _cached_cudillero_methodology_text()
     stations_geo = parse_radial_station_coords_from_methodology(md_method)
 
-    col_map, col_txt = st.columns([1, 1], gap="large")
+    # ── Datos: filtro radial + fechas del banner (mismo ámbito que el visor) ─
+    _bootstrap_ieo_repo_path()
+    from ieo.radiales_catalog import RADIAL_ID_CUDILLERO, filter_dataframe_to_radial  # noqa: PLC0415
 
-    with col_map:
-        if not stations_geo:
-            st.info(
-                "Aún no hay coordenadas en metadatos del markdown: el mapa muestra la zona de referencia. "
-                "Añada al final de `docs/metodologia_radiales_cudillero.md` la línea `<!-- E1 lat lon | … | E4 … -->` "
-                "(solo metadatos; el visor la lee y no se muestra al usuario en el texto)."
-            )
-        fig_map = build_cudillero_radial_map_figure(stations_geo)
-        map_sel = st.plotly_chart(
-            fig_map,
-            use_container_width=True,
-            on_select="rerun",
-            selection_mode="points",
-            key="cud_mapbox",
-            config={"displayModeBar": False},
+    df_c, n_other_radial = filter_dataframe_to_radial(pipe.df_clean, RADIAL_ID_CUDILLERO)
+    if n_other_radial > 0:
+        st.warning(
+            f"Se excluyeron **{n_other_radial:,}** filas de otras radiales del CSV combinado. "
+            f"El visor muestra solo Cudillero (E1CU, E2CU, E3CU)."
         )
+    if df_c.empty:
+        st.error("No hay filas de Cudillero en esta corrida. Revisa el CSV o vuelve a ejecutar el pipeline.")
+        st.stop()
 
-    with col_txt:
-        st.markdown("#### Metodología")
-        md_display = re.sub(r"<!--.*?-->", "", md_method, flags=re.DOTALL).strip()
-        html_method = markdown.markdown(md_display, extensions=["extra", "sane_lists"])
-        st.markdown(
-            f"""
-            <div style="max-height: 520px; overflow-y: auto; padding-right: 8px; font-size: 0.92em; line-height: 1.5;">
-            {html_method}
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    _fc = df_c["fecha"].dropna()
+    _fecha_min_y = str(_fc.min().year) if len(_fc) else "—"
+    _fecha_max_y = str(_fc.max().year) if len(_fc) else "—"
+    _ultima_campana = _fc.max().strftime("%d/%m/%Y") if len(_fc) else "—"
 
-    st.markdown("---")
+    # ── Hero estilo DatasturHero ──────────────────────────────────────────────
+    st.markdown(
+        f"""
+<div style="
+    background:linear-gradient(135deg,#0E1626 0%,#080D16 100%);
+    border:1px solid rgba(255,255,255,0.07);
+    border-radius:12px;
+    padding:28px 32px 24px;
+    margin-bottom:20px;
+    position:relative;
+    overflow:hidden;
+">
+  <!-- glow decorativo -->
+  <div style="
+    position:absolute;top:-60px;right:-60px;
+    width:260px;height:260px;
+    border-radius:50%;
+    background:radial-gradient(circle,rgba(0,191,255,0.08) 0%,transparent 70%);
+    pointer-events:none;
+  "></div>
 
-    @st.cache_data(show_spinner="Agregando serie mensual por profundidad…")
-    def _monthly_value_at_depth(
-        df: pd.DataFrame,
-        col_fecha: str,
-        col_prof: str,
-        col_value: str,
-        col_estacion: str,
-        target_depth_m: float,
-    ) -> tuple[pd.DataFrame, dict[str, float | int]]:
-        """Interpola ``col_value`` a ``target_depth_m`` por lance y agrega media mensual por estación."""
-        use_cols = [col_fecha, col_prof, col_value, col_estacion] + (["acronimo"] if "acronimo" in df.columns else [])
-        work = df[use_cols].copy()
-        work[col_fecha] = pd.to_datetime(work[col_fecha], errors="coerce")
-        work[col_prof] = pd.to_numeric(work[col_prof], errors="coerce")
-        work[col_value] = pd.to_numeric(work[col_value], errors="coerce")
-        work[col_estacion] = pd.to_numeric(work[col_estacion], errors="coerce")
-        work = work.dropna(subset=[col_fecha, col_prof, col_value, col_estacion])
-        if work.empty:
-            return pd.DataFrame(), {
-                "n_casts": 0,
-                "n_casts_con_valor": 0,
-                "n_casts_sin_cobertura_en_profundidad": 0,
-                "profundidad_objetivo_m": int(target_depth_m) if target_depth_m == int(target_depth_m) else target_depth_m,
-            }
+  <!-- badge estado -->
+  <div style="
+    display:inline-flex;align-items:center;gap:6px;
+    padding:4px 10px;border-radius:9999px;
+    border:1px solid rgba(0,191,255,0.25);
+    background:rgba(0,191,255,0.08);
+    font-family:'JetBrains Mono',monospace;
+    font-size:0.65rem;font-weight:700;
+    text-transform:uppercase;letter-spacing:0.18em;
+    color:#00BFFF;margin-bottom:14px;
+  ">
+    <span style="width:6px;height:6px;border-radius:50%;background:#00BFFF;
+                 box-shadow:0 0 6px #00BFFF;animation:none;"></span>
+    Sistema operativo
+  </div>
 
-        if "acronimo" in work.columns:
-            group_keys = ["acronimo", col_estacion]
+  <!-- título -->
+  <h1 style="
+    font-family:'Plus Jakarta Sans',sans-serif;
+    font-size:2rem;font-weight:800;
+    color:#E2EAF4;letter-spacing:-0.02em;
+    margin:0 0 6px;line-height:1.15;
+  ">Radiales Cudillero</h1>
+
+  <!-- subtítulo -->
+  <p style="
+    font-size:0.88rem;color:#A8BBCF;margin:0 0 18px;line-height:1.5;
+  ">
+    Visor de series temporales oceánicas &nbsp;·&nbsp; IEO-CSIC · Proyecto Radiales · Cantábrico
+  </p>
+
+  <!-- chips de cobertura -->
+  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    <span style="
+      padding:4px 12px;border-radius:9999px;
+      background:rgba(255,255,255,0.05);
+      border:1px solid rgba(255,255,255,0.1);
+      font-size:0.72rem;color:#A8BBCF;
+      font-family:'JetBrains Mono',monospace;
+    ">Cobertura <strong style="color:#E2EAF4;">{_fecha_min_y}–{_fecha_max_y}</strong></span>
+    <span style="
+      padding:4px 12px;border-radius:9999px;
+      background:rgba(255,255,255,0.05);
+      border:1px solid rgba(255,255,255,0.1);
+      font-size:0.72rem;color:#A8BBCF;
+      font-family:'JetBrains Mono',monospace;
+    ">Última campaña <strong style="color:#E2EAF4;">{_ultima_campana}</strong></span>
+    <span style="
+      padding:4px 12px;border-radius:9999px;
+      background:rgba(255,255,255,0.05);
+      border:1px solid rgba(255,255,255,0.1);
+      font-size:0.72rem;color:#A8BBCF;
+      font-family:'JetBrains Mono',monospace;
+    ">E1CU · E2CU · E3CU</span>
+  </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+    _render_pipeline_provenance_banner(
+        n_clean=len(pipe.df_clean),
+        n_anom=len(pipe.df_anomalies),
+        fecha_min=str(_fc.min().date()) if len(_fc) else "—",
+        fecha_max=str(_fc.max().date()) if len(_fc) else "—",
+    )
+
+    # ── Opciones de estación (df_c ya filtrado) ───────────────────────────────
+    col_temp, col_sal, col_prof = pipe.col_temp, pipe.col_sal, pipe.col_prof
+    depth_m = 5.0
+
+    ids_map = [int(s["estacion"]) for s in stations_geo]
+    ids_data = sorted({int(float(x)) for x in df_c["estacion"].dropna().unique().tolist()})
+    opts = sorted(set(ids_map) & set(ids_data)) or [1, 2, 3]
+    name_by_id = {int(s["estacion"]): str(s["nombre"]) for s in stations_geo}
+
+    # ── Leer clic de mapa desde session_state (el mapa se renderiza abajo) ───
+    _raw_map = st.session_state.get("cud_mapbox")
+    try:
+        if _raw_map is None:
+            _pts: list = []
+        elif isinstance(_raw_map, dict):
+            _pts = (_raw_map.get("selection") or {}).get("points", [])
         else:
-            work["_fecha_d"] = work[col_fecha].dt.date
-            group_keys = ["_fecha_d", col_estacion]
-
-        def _interp_value(profile: pd.DataFrame) -> float:
-            dft = (
-                pd.DataFrame({"z": profile[col_prof].to_numpy(dtype=float), "v": profile[col_value].to_numpy(dtype=float)})
-                .dropna()
-                .groupby("z", as_index=False)["v"]
-                .mean()
-                .sort_values("z")
-            )
-            if dft.empty:
-                return float("nan")
-            z = dft["z"].to_numpy(dtype=float)
-            v = dft["v"].to_numpy(dtype=float)
-            if target_depth_m < float(z[0]) or target_depth_m > float(z[-1]):
-                return float("nan")
-            return float(np.interp(target_depth_m, z, v))
-
-        per_cast = (
-            work.groupby(group_keys, as_index=False)
-            .apply(
-                lambda g: pd.Series(
-                    {
-                        "fecha": pd.to_datetime(g[col_fecha].iloc[0]).to_period("M").to_timestamp(how="start"),
-                        "valor_prof": _interp_value(g),
-                    }
-                ),
-                include_groups=False,
-            )
-            .reset_index(drop=True)
-        )
-        n_casts = int(len(per_cast))
-        n_valid = int(per_cast["valor_prof"].notna().sum())
-        diag: dict[str, float | int] = {
-            "n_casts": n_casts,
-            "n_casts_con_valor": n_valid,
-            "n_casts_sin_cobertura_en_profundidad": n_casts - n_valid,
-            "profundidad_objetivo_m": int(target_depth_m) if target_depth_m == int(target_depth_m) else target_depth_m,
-        }
-
-        per_cast = per_cast.dropna(subset=["valor_prof", "fecha"])
-        if per_cast.empty:
-            return pd.DataFrame(), diag
-
-        agg = per_cast.groupby([col_estacion, "fecha"], as_index=False)["valor_prof"].mean()
-        agg = agg.loc[:, [col_estacion, "fecha", "valor_prof"]]
-        return agg.sort_values([col_estacion, "fecha"]).reset_index(drop=True), diag
+            _pts = (getattr(_raw_map, "selection", None) or {}).get("points", [])
+    except Exception:
+        _pts = []
+    if _pts:
+        _cd = _pts[0].get("customdata", None)
+        _est_val = None
+        if isinstance(_cd, (list, tuple)):
+            _est_val = _cd[0] if len(_cd) > 0 else None
+        elif isinstance(_cd, np.ndarray):
+            _est_val = _cd.flatten()[0] if _cd.size > 0 else None
+        elif isinstance(_cd, dict):
+            _est_val = next(iter(_cd.values()), None) if _cd else None
+        if _est_val is not None and str(_est_val).strip() != "":
+            _clicked = int(float(_est_val))
+            st.session_state["station_tab_temp"] = _clicked
+            st.session_state["station_tab_sal"] = _clicked
 
     def _axis_label_for_value_column(col: str) -> str:
         c = str(col).lower()
@@ -624,15 +915,12 @@ def render_radiales_cudillero() -> None:
         target_depth_m: float = 5.0,
         col_estacion: str = "estacion",
         col_fecha: str = "fecha",
-        fixed_station: int | None = None,
+        fixed_station: int,
         widget_key_suffix: str = "",
-        df_if_overlay: pd.DataFrame | None = None,
     ) -> None:
-        station_key = f"estacion_seleccionada_{source_label.lower().strip()}{widget_key_suffix}"
         if df_gijon is None or df_gijon.empty:
             st.warning(
-                "No hay datos listos para graficar: revisa la **corrida seleccionada** en la barra lateral "
-                "y el expander **«Fuente de datos (corrida seleccionada)»** arriba."
+                "No hay datos listos para graficar: revisa el **conjunto de datos** seleccionado en la barra lateral."
             )
             return
 
@@ -758,63 +1046,8 @@ def render_radiales_cudillero() -> None:
             )
             if not unlock:
                 return
-        if warns:
-            st.warning("**Contrato de datos radial:** avisos\n\n" + _rc.format_violations_markdown(warns))
 
-        with st.expander("Cobertura de datos (transparencia)", expanded=False):
-            st.markdown(
-                f"- Perfiles (lances) considerados: **{diag_interp['n_casts']}**\n"
-                f"- Con valor interpolado a {diag_interp['profundidad_objetivo_m']} m: **{diag_interp['n_casts_con_valor']}**\n"
-                f"- Sin cobertura a esa profundidad (perfil no alcanza el rango): **{diag_interp['n_casts_sin_cobertura_en_profundidad']}**\n"
-                "\n*Sin extrapolación fuera del rango vertical observado en cada lance.*"
-            )
-
-        # Selector de estación (mapa + radio) o estación fija (p. ej. salinidad ×3)
-        if fixed_station is None:
-            if stations_geo:
-                try:
-                    pts = (map_sel.selection or {}).get("points", []) if map_sel else []  # type: ignore[union-attr]
-                except Exception:
-                    pts = []
-                if pts:
-                    cd = pts[0].get("customdata", None)
-                    est_val = None
-                    try:
-                        import numpy as _np  # noqa: PLC0415
-                    except Exception:
-                        _np = None  # type: ignore[assignment]
-                    if isinstance(cd, (list, tuple)):
-                        est_val = cd[0] if len(cd) > 0 else None
-                    elif _np is not None and isinstance(cd, _np.ndarray):  # type: ignore[arg-type]
-                        est_val = cd.flatten()[0] if cd.size > 0 else None
-                    elif isinstance(cd, dict):
-                        est_val = cd.get(0, None)
-                        if est_val is None and len(cd) > 0:
-                            est_val = next(iter(cd.values()))
-                    if est_val is not None and str(est_val).strip() != "":
-                        st.session_state[station_key] = int(float(est_val))
-
-            ids_map = [int(s["estacion"]) for s in stations_geo]
-            ids_data = sorted(df_monthly[col_estacion].dropna().unique().astype(int).tolist())
-            opts = sorted(set(ids_map) | set(ids_data))
-            if not opts:
-                opts = [1, 2, 3]
-            if int(st.session_state.get(station_key, opts[0])) not in opts:
-                st.session_state[station_key] = int(opts[0])
-
-            name_by_id = {int(s["estacion"]): str(s["nombre"]) for s in stations_geo}
-            st.caption("Elija la estación para el gráfico (clic en una marca del mapa o selector siguiente).")
-            st.radio(
-                "Estación",
-                options=opts,
-                horizontal=True,
-                key=station_key,
-                format_func=lambda n: name_by_id.get(int(n), f"Estación {int(n)}"),
-            )
-
-            selected = int(st.session_state.get(station_key, opts[0]))
-        else:
-            selected = int(fixed_station)
+        selected = int(fixed_station)
         df_station = df_monthly[df_monthly[col_estacion] == int(selected)].copy()
         df_station["fecha"] = pd.to_datetime(df_station["fecha"], errors="coerce")
         df_station["valor_prof"] = pd.to_numeric(df_station["valor_prof"], errors="coerce")
@@ -834,18 +1067,23 @@ def render_radiales_cudillero() -> None:
 
         var_lbl, var_unt = _var_meta(str(col_value_resolved))
         depth_lbl = int(target_depth_m) if float(target_depth_m).is_integer() else target_depth_m
-        st.subheader(f"{var_lbl} a {depth_lbl} m — Descomposición Marcos + pronóstico ATAC · Estación {selected}")
+        _est_name = name_by_id.get(int(selected), f"Estación {int(selected)}")
+        st.subheader(f"{_est_name}")
         try:
-            from atac_monthly_report import build_atac_monthly_figure  # noqa: PLC0415
+            import importlib  # noqa: PLC0415
+            import atac_monthly_report as _atac_mod  # noqa: PLC0415
+            importlib.reload(_atac_mod)
+            build_atac_monthly_figure = _atac_mod.build_atac_monthly_figure
 
             monthly_for_atac = df_station[["fecha", "valor_prof"]].rename(columns={"valor_prof": "temp_5m"})
             res = build_atac_monthly_figure(
                 project_root=PROJECT_ROOT,
                 monthly_5m=monthly_for_atac,
-                station_label=str(int(selected)),
+                station_label=_est_name,
                 holdout_months=12,
                 var_label=var_lbl,
                 var_units=var_unt,
+                depth_m=int(target_depth_m),
             )
         except Exception as exc:
             st.warning(
@@ -855,73 +1093,260 @@ def render_radiales_cudillero() -> None:
             )
             return
 
-        st.plotly_chart(res.fig, use_container_width=True)
-        st.markdown(res.footer_md)
+        # ── Tarjetones de calidad de datos (encima de la gráfica) ──────────────
+        _n_casts = diag_interp["n_casts"]
+        _n_valid = diag_interp["n_casts_con_valor"]
+        _pct_prof = round(100 * _n_valid / max(_n_casts, 1))
 
-        if (
-            df_if_overlay is not None
-            and not df_if_overlay.empty
-            and "_viewer_anomaly" in df_if_overlay.columns
-        ):
-            band = df_if_overlay[df_if_overlay[col_estacion] == int(selected)].copy()
-            band[col_fecha] = pd.to_datetime(band[col_fecha], errors="coerce")
-            band[col_prof] = pd.to_numeric(band[col_prof], errors="coerce")
-            vcol = str(col_value_resolved)
-            band[vcol] = pd.to_numeric(band[vcol], errors="coerce")
-            band = band.dropna(subset=[col_fecha, col_prof, vcol])
-            near = band[(band[col_prof] - float(target_depth_m)).abs() <= 3.0]
-            if not near.empty:
-                st.caption(
-                    f"Puntos cerca de **{target_depth_m:g} m** (±3 m): limpio vs anomalía IF (misma variable que el ATAC)."
-                )
-                fig_if = go.Figure()
-                for flag, lab, colm in [
-                    (False, "Limpio (pipeline)", "#2E86AB"),
-                    (True, "Anomalía IF", "#C1121F"),
-                ]:
-                    sl = near[near["_viewer_anomaly"] == flag]
-                    if sl.empty:
-                        continue
-                    fig_if.add_trace(
-                        go.Scatter(
-                            x=sl[col_fecha],
-                            y=sl[vcol],
-                            mode="markers",
-                            name=lab,
-                            marker=dict(size=7, color=colm, opacity=0.78),
-                            hovertemplate=f"%{{x|%Y-%m-%d}}<br>{var_lbl}=%{{y:.4f}}<extra></extra>",
-                        )
-                    )
-                fig_if.update_layout(
-                    title=f"{var_lbl} (±3 m de {target_depth_m:g} m) · estación {selected}",
-                    xaxis_title="Fecha",
-                    yaxis_title=f"{var_lbl} ({var_unt})".strip(),
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02),
-                    height=380,
-                    margin=dict(l=48, r=24, t=48, b=48),
-                )
-                st.plotly_chart(fig_if, use_container_width=True)
-
-    df_c = pipe.df_clean
-    col_temp, col_sal, col_prof = pipe.col_temp, pipe.col_sal, pipe.col_prof
-    depth_m = 5.0
-    tab_atac, tab_if = st.tabs(["Marcos + ATAC (datos limpios)", "Anomalías Isolation Forest"])
-    with tab_atac:
-        st.subheader("Temperatura a 5 m · Marcos + ATAC")
-        _render_series_and_atac(
-            df_gijon=df_c,
-            source_label="Pipeline",
-            col_prof=col_prof,
-            col_temp=col_temp,
-            col_value=col_temp,
-            target_depth_m=depth_m,
-            fixed_station=None,
-            df_if_overlay=pipe.df_concat_viz,
+        # Cobertura mensual: meses observados vs meses en el calendario de la serie
+        _fecha_min_st = df_station["fecha"].min()
+        _fecha_max_st = df_station["fecha"].max()
+        _total_months = int(
+            (_fecha_max_st.year - _fecha_min_st.year) * 12
+            + (_fecha_max_st.month - _fecha_min_st.month)
+            + 1
         )
-        st.markdown("---")
-        st.subheader("Salinidad a 5 m · Marcos + ATAC (estaciones 1–3)")
-        for sid in (1, 2, 3):
-            st.markdown(f"##### Estación {sid}")
+        _pct_months = round(100 * int(n_obs_months) / max(_total_months, 1))
+
+        def _card_accent(pct: int) -> str:
+            if pct >= 75:
+                return "#10b981"  # verde
+            if pct >= 45:
+                return "#f59e0b"  # ámbar
+            return "#ef4444"     # rojo
+
+        _gap_label = res.gap_summary if res.gap_summary else "Sin huecos significativos."
+        _gap_accent = "#10b981" if not res.gap_summary else "#f59e0b"
+        _ultima = df_station["fecha"].max().strftime("%b %Y")
+
+        def _metric_card(stat: str, label: str, body: str, accent: str) -> str:
+            return (
+                f"<div style='border:1px solid rgba(255,255,255,0.07);border-top:3px solid {accent};"
+                f"border-radius:8px;padding:14px 16px 12px;background:#0E1626;'>"
+                f"<div style='font-family:\"JetBrains Mono\",monospace;font-size:1.2rem;font-weight:700;"
+                f"color:{accent};margin-bottom:3px;'>{stat}</div>"
+                f"<div style='font-size:0.63rem;font-weight:700;text-transform:uppercase;"
+                f"letter-spacing:0.1em;color:#5B7FA3;margin-bottom:6px;'>{label}</div>"
+                f"<div style='font-size:0.72rem;color:#A8BBCF;line-height:1.5;'>{body}</div>"
+                f"</div>"
+            )
+
+        _quality_cards = (
+            _metric_card(
+                f"{_pct_months}\u202f%",
+                "Cobertura mensual",
+                f"{int(n_obs_months)} de {_total_months} meses con observación "
+                f"({_fecha_min_st.strftime('%Y')}–{_fecha_max_st.strftime('%Y')})",
+                _card_accent(_pct_months),
+            )
+            + _metric_card(
+                f"{_pct_prof}\u202f%",
+                f"Perfiles válidos a {depth_lbl} m",
+                f"{_n_valid} de {_n_casts} lances alcanzan la profundidad objetivo. "
+                f"{diag_interp['n_casts_sin_cobertura_en_profundidad']} sin cobertura.",
+                _card_accent(_pct_prof),
+            )
+            + _metric_card(
+                _ultima,
+                "Última campaña",
+                "Fecha del muestreo más reciente incluido en esta serie.",
+                "#1a9aff",
+            )
+            + _metric_card(
+                str(len([s for s in res.gap_summary.split(";") if s.strip()])) if res.gap_summary else "0",
+                "Períodos sin dato",
+                _gap_label,
+                _gap_accent,
+            )
+        )
+        st.markdown(
+            "<div style='display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;'>"
+            + _quality_cards
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+
+        st.plotly_chart(res.fig, use_container_width=True)
+
+        # Hitos del investigador en horizontal
+        _render_investigator_highlights(res, var_unt)
+
+        # Acordeón FAQ
+        _pairs = [s.split("|||", 1) for s in res.footer_md.split("\n\n---\n\n") if "|||" in s]
+        _qa_style = (
+            "<style>"
+            "details.ieo-qa{"
+            "  border:1px solid rgba(255,255,255,0.07);"
+            "  border-radius:8px;"
+            "  margin-bottom:5px;"
+            "  background:#0E1626;"
+            "  overflow:hidden;"
+            "}"
+            "details.ieo-qa[open]{"
+            "  border-left:3px solid #00BFFF;"
+            "  border-radius:0 8px 8px 0;"
+            "}"
+            "details.ieo-qa summary{"
+            "  cursor:pointer;"
+            "  padding:9px 12px;"
+            "  font-size:0.76rem;"
+            "  font-weight:600;"
+            "  color:#A8BBCF;"
+            "  list-style:none;"
+            "  display:flex;"
+            "  justify-content:space-between;"
+            "  align-items:center;"
+            "  user-select:none;"
+            "}"
+            "details.ieo-qa[open] summary{color:#E2EAF4;}"
+            "details.ieo-qa summary::-webkit-details-marker{display:none;}"
+            ".ieo-qa-chevron{font-size:0.7rem;color:#5B7FA3;transition:transform 0.15s;}"
+            "details.ieo-qa[open] .ieo-qa-chevron{transform:rotate(180deg);color:#00BFFF;}"
+            ".ieo-qa-body{"
+            "  padding:2px 12px 10px;"
+            "  font-size:0.73rem;"
+            "  color:#A8BBCF;"
+            "  line-height:1.65;"
+            "}"
+            "</style>"
+        )
+        if _pairs:
+            _items = "".join(
+                f"<details class='ieo-qa'>"
+                f"<summary>{q.strip()}<span class='ieo-qa-chevron'>▾</span></summary>"
+                f"<div class='ieo-qa-body'>{a.strip()}</div>"
+                f"</details>"
+                for q, a in _pairs
+            )
+            st.markdown(
+                _qa_style
+                + "<p style='font-size:0.65rem;font-family:\"JetBrains Mono\",monospace;font-weight:700;"
+                "text-transform:uppercase;letter-spacing:0.18em;color:#00BFFF;"
+                "margin:16px 0 8px;'>"
+                "Preguntas sobre esta gráfica</p>"
+                + _items,
+                unsafe_allow_html=True,
+            )
+
+        if warns:
+            _warn_svg = (
+                "<svg width='16' height='16' viewBox='0 0 24 24' fill='none' "
+                "stroke='#f59e0b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>"
+                "<path d='m21.73 18-8-14a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 22h16a2 2 0 0 0 1.73-4Z'/>"
+                "<line x1='12' y1='9' x2='12' y2='13'/>"
+                "<line x1='12' y1='17' x2='12.01' y2='17'/>"
+                "</svg>"
+            )
+            _warn_items = "".join(
+                f"<li style='margin-bottom:4px;'>{_rc.format_contract_warning_postchart(w)}</li>"
+                for w in warns
+            )
+            st.markdown(
+                f"<div style='background:#1a1200;border:1px solid rgba(245,158,11,0.25);"
+                f"border-left:3px solid #f59e0b;border-radius:8px;padding:12px 16px;margin-top:12px;'>"
+                f"<div style='display:flex;align-items:center;gap:7px;margin-bottom:6px;'>"
+                f"{_warn_svg}"
+                f"<span style='font-size:0.63rem;font-weight:700;text-transform:uppercase;"
+                f"letter-spacing:0.1em;color:#f59e0b;'>Notas automáticas de calidad</span>"
+                f"</div>"
+                f"<ul style='margin:0;padding-left:16px;font-size:0.74rem;color:#A8BBCF;line-height:1.6;'>"
+                f"{_warn_items}"
+                f"</ul>"
+                f"<p style='margin:8px 0 0;font-size:0.62rem;color:#5B7FA3;'>No bloquean la visualización · "
+                f"contexto estadístico, no error de medición.</p>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+    # ── Pestañas — primer elemento visual tras la cabecera ───────────────────
+    st.markdown(
+        "<p style='font-size:0.65rem;font-family:\"JetBrains Mono\",monospace;font-weight:700;"
+        "text-transform:uppercase;letter-spacing:0.18em;color:#00BFFF;margin:20px 0 8px;'>"
+        "Explorar datos</p>",
+        unsafe_allow_html=True,
+    )
+    tab_temp, tab_sal = st.tabs(["Temperatura", "Salinidad"])
+
+    def _station_buttons(tab_key: str) -> int | None:
+        """Renderiza tres botones de estación y devuelve la seleccionada (o None)."""
+        current = st.session_state.get(tab_key)
+        btn_labels = [name_by_id.get(o, f"E{o}CU") for o in opts]
+        pad = max(0, 4 - len(opts))
+        bcols = st.columns(len(opts) + pad, gap="small")
+        for i, (opt, lbl) in enumerate(zip(opts, btn_labels)):
+            is_active = current == opt
+            if bcols[i].button(
+                lbl,
+                key=f"btn_{tab_key}_{opt}",
+                type="primary" if is_active else "secondary",
+                use_container_width=True,
+            ):
+                st.session_state[tab_key] = opt
+                st.rerun()
+        return st.session_state.get(tab_key)
+
+    def _depth_buttons(suffix: str) -> None:
+        """Fila de profundidades: 5 m activa, resto deshabilitadas (próximamente)."""
+        depth_opts = [5, 20, 50]
+        pad = max(0, 7 - len(depth_opts))
+        dcols = st.columns(len(depth_opts) + pad, gap="small")
+        for i, d in enumerate(depth_opts):
+            available = d == 5
+            dcols[i].button(
+                f"{d} m",
+                key=f"btn_depth_{suffix}_{d}",
+                type="primary" if available else "secondary",
+                disabled=not available,
+                help=None if available else "Próximamente disponible",
+                use_container_width=True,
+            )
+
+    with tab_temp:
+        sel_temp = _station_buttons("station_tab_temp")
+        st.markdown(
+            "<p style='font-size:0.63rem;font-family:\"JetBrains Mono\",monospace;"
+            "text-transform:uppercase;letter-spacing:0.1em;color:#5B7FA3;margin:6px 0 2px 0;'>Profundidad</p>",
+            unsafe_allow_html=True,
+        )
+        _depth_buttons("temp")
+        st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
+        if sel_temp is None:
+            st.markdown(
+                "<div style='text-align:center;color:#5B7FA3;padding:60px 0;font-size:0.85rem;"
+                "font-family:\"JetBrains Mono\",monospace;letter-spacing:0.04em;'>"
+                "Selecciona una estación para ver la serie temporal."
+                "</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            _render_series_and_atac(
+                df_gijon=df_c,
+                source_label="Pipeline",
+                col_prof=col_prof,
+                col_temp=col_temp,
+                col_value=col_temp,
+                target_depth_m=depth_m,
+                fixed_station=int(sel_temp),
+            )
+
+    with tab_sal:
+        sel_sal = _station_buttons("station_tab_sal")
+        st.markdown(
+            "<p style='font-size:0.63rem;font-family:\"JetBrains Mono\",monospace;"
+            "text-transform:uppercase;letter-spacing:0.1em;color:#5B7FA3;margin:6px 0 2px 0;'>Profundidad</p>",
+            unsafe_allow_html=True,
+        )
+        _depth_buttons("sal")
+        st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
+        if sel_sal is None:
+            st.markdown(
+                "<div style='text-align:center;color:#5B7FA3;padding:60px 0;font-size:0.85rem;"
+                "font-family:\"JetBrains Mono\",monospace;letter-spacing:0.04em;'>"
+                "Selecciona una estación para ver la serie temporal."
+                "</div>",
+                unsafe_allow_html=True,
+            )
+        else:
             _render_series_and_atac(
                 df_gijon=df_c,
                 source_label="Pipeline",
@@ -929,12 +1354,47 @@ def render_radiales_cudillero() -> None:
                 col_temp=col_temp,
                 col_value=col_sal,
                 target_depth_m=depth_m,
-                fixed_station=int(sid),
-                widget_key_suffix=f"_sal_{sid}",
-                df_if_overlay=pipe.df_concat_viz,
+                fixed_station=int(sel_sal),
+                widget_key_suffix="_sal",
             )
-    with tab_if:
-        _render_isolation_forest_tab(pipe)
+
+    # ── Transecto — mapa y contexto metodológico al final ────────────────────
+    st.markdown("---")
+    st.markdown(
+        "<p style='font-size:0.65rem;font-family:\"JetBrains Mono\",monospace;font-weight:700;"
+        "text-transform:uppercase;letter-spacing:0.18em;color:#00BFFF;margin:0 0 10px 0;'>"
+        "Transecto · ubicación de las estaciones</p>",
+        unsafe_allow_html=True,
+    )
+    col_map, col_txt = st.columns([1, 1], gap="large")
+
+    with col_map:
+        st.caption("Haz clic en una estación del mapa para seleccionarla en las pestañas de arriba.")
+        if not stations_geo:
+            st.info(
+                "Coordenadas no disponibles. Añade `<!-- E1 lat lon | … -->` al final de "
+                "`docs/metodologia_radiales_cudillero.md` para activar el mapa."
+            )
+        fig_map = build_cudillero_radial_map_figure(stations_geo)
+        st.plotly_chart(
+            fig_map,
+            use_container_width=True,
+            on_select="rerun",
+            selection_mode="points",
+            key="cud_mapbox",
+            config={"displayModeBar": False},
+        )
+
+    with col_txt:
+        st.markdown("#### Metodología")
+        st.caption("Perfiles CTD mensuales sobre la plataforma cantábrica, transecto perpendicular a la costa.")
+        md_display = re.sub(r"<!--.*?-->", "", md_method, flags=re.DOTALL).strip()
+        html_method = markdown.markdown(md_display, extensions=["extra", "sane_lists"])
+        st.markdown(
+            f"<div style='max-height:400px;overflow-y:auto;padding-right:8px;"
+            f"font-size:0.86em;line-height:1.6;color:#A8BBCF;'>{html_method}</div>",
+            unsafe_allow_html=True,
+        )
 
 
 def main() -> None:
@@ -948,73 +1408,6 @@ def main() -> None:
             append_public_run_journal_entry(PROJECT_ROOT, kind="streamlit_dashboard_boot")
         except Exception:
             pass
-
-    st.markdown("## Radiales Cudillero · visor exploratorio")
-    valid_sidebar = list_valid_run_roots(PROJECT_ROOT)
-    with st.sidebar:
-        st.markdown("### Corrida del pipeline")
-        if valid_sidebar:
-            labels: dict[str, str] = {LATEST_SENTINEL: "Última corrida (automático)"}
-            for p in valid_sidebar:
-                labels[p.name] = f"{p.name} · {datetime.fromtimestamp(p.stat().st_mtime).strftime('%Y-%m-%d %H:%M')}"
-            st.selectbox(
-                "Datos a visualizar",
-                options=[LATEST_SENTINEL] + [p.name for p in valid_sidebar],
-                format_func=lambda x: labels.get(str(x), str(x)),
-                key="pipeline_run_select",
-            )
-            _choice = st.session_state.get("pipeline_run_select", LATEST_SENTINEL)
-            _rr = resolve_run_root_for_ui(PROJECT_ROOT, _choice)
-            if _rr is not None:
-                with st.expander("Provenance (corrida seleccionada)", expanded=False):
-                    _prov = read_provenance_dict(_rr)
-                    if _prov is not None:
-                        st.json(_prov)
-                    else:
-                        st.caption("No hay `provenance.json` en esta corrida.")
-                    st.caption(
-                        f"Token frescura Parquet limpio: `{clean_parquet_cache_token(_rr)}` · "
-                        f"`{(_rr / 'data' / 'perfiles_all.ctd_clean.parquet').resolve()}`"
-                    )
-        else:
-            st.caption("Sin corridas con `ctd_clean.parquet`. Ejecuta `python run/main.py` primero.")
-
-        st.markdown("### Pipeline (local)")
-        st.caption(
-            "Equivale a `python run/main.py` desde la raíz del repo. Requiere `data/processed/perfiles_all.csv`."
-        )
-        if st.button("Ejecutar pipeline ahora", key="btn_run_pipeline_main", help="Bloquea hasta terminar (típ. segundos–minutos)."):
-            import subprocess  # noqa: PLC0415
-
-            main_py = PROJECT_ROOT / "run" / "main.py"
-            with st.spinner("Ejecutando pipeline…"):
-                proc = subprocess.run(
-                    [sys.executable, str(main_py)],
-                    cwd=str(PROJECT_ROOT),
-                    capture_output=True,
-                    text=True,
-                    timeout=7200,
-                )
-            tail = (proc.stdout or "")[-6000:] + "\n--- stderr ---\n" + (proc.stderr or "")[-4000:]
-            st.code(tail or "(sin salida)", language="text")
-            if proc.returncode == 0:
-                st.success("Pipeline terminado. Recarga la página o revisa el selector de corrida.")
-            else:
-                st.error(f"Código de salida: {proc.returncode}")
-
-        st.markdown("### Trazabilidad")
-        st.caption(
-            "Cada arranque del visor deja constancia en un diario Markdown (apéndices). "
-            "Elige la corrida arriba; el detalle de fuente está en **«Fuente de datos (corrida seleccionada)»** "
-            "en la página principal."
-        )
-        st.code("outputs/audit/registro_ejecuciones.md", language=None)
-        st.caption("Ruta relativa al clon del repositorio en el servidor o puesto de trabajo.")
-        st.markdown("### Costuras a vigilar")
-        st.caption(
-            "Serie mensual e interpolación a 5 m · pocos meses para ATAC · "
-            "coherencia de los Parquet con la metodología antes de informar."
-        )
 
     render_radiales_cudillero()
 

@@ -31,6 +31,7 @@ class AtacMonthlyResult:
     footer_md: str
     pipe: pd.DataFrame
     meta: dict[str, Any]
+    gap_summary: str  # frase compacta de huecos (vacía si no hay ninguno significativo)
 
 
 def _load_analysis_module(project_root: Path) -> Any:
@@ -47,6 +48,45 @@ def _load_analysis_module(project_root: Path) -> Any:
     return mod
 
 
+def _describe_long_month_gaps(
+    dates: pd.Series, *, min_gap_months: int = 3
+) -> tuple[list[str], str]:
+    """Entre dos meses con observación, detecta huecos ≥ min_gap_months.
+
+    Returns
+    -------
+    lines : list of detailed markdown strings (one per gap)
+    summary : single human sentence summarising all gaps (empty string if none)
+    """
+    s = pd.to_datetime(dates, errors="coerce").dropna().sort_values()
+    if s.empty or len(s) < 2:
+        return [], ""
+    periods = sorted({p for p in s.dt.to_period("M")})
+    gaps: list[tuple[int, str, str]] = []
+    lines: list[str] = []
+    for a_per, b_per in zip(periods[:-1], periods[1:]):
+        gap = int(b_per.ordinal - a_per.ordinal - 1)
+        if gap >= min_gap_months:
+            a_ts = a_per.to_timestamp(how="start")
+            b_ts = b_per.to_timestamp(how="start")
+            a_str = a_ts.strftime("%b %Y")
+            b_str = b_ts.strftime("%b %Y")
+            gaps.append((gap, a_str, b_str))
+            lines.append(f"- {a_str} → {b_str}: {gap} meses sin observación.")
+    if not gaps:
+        return [], ""
+    n = len(gaps)
+    biggest = max(gaps, key=lambda x: x[0])
+    if n == 1:
+        summary = f"Sin datos entre {biggest[1]} y {biggest[2]} ({biggest[0]} meses)."
+    else:
+        summary = (
+            f"{n} períodos sin campaña; el mayor entre {biggest[1]} y {biggest[2]} "
+            f"({biggest[0]} meses)."
+        )
+    return lines, summary
+
+
 def build_atac_monthly_figure(
     *,
     project_root: Path,
@@ -55,6 +95,7 @@ def build_atac_monthly_figure(
     holdout_months: int = 12,
     var_label: str = "Temperatura",
     var_units: str = "°C",
+    depth_m: int = 5,
 ) -> AtacMonthlyResult:
     """
     monthly_5m: DataFrame con columnas:
@@ -102,6 +143,8 @@ def build_atac_monthly_figure(
     base = base.dropna(subset=["fecha"]).sort_values("fecha")
     if base.empty:
         raise ValueError("Serie mensual vacía.")
+
+    gap_lines, gap_summary = _describe_long_month_gaps(base["fecha"], min_gap_months=3)
 
     dec, meta_m = analysis.decompose_marcos_holdout_last_n(
         base,
@@ -259,63 +302,65 @@ def build_atac_monthly_figure(
     ar_txt = "n/d" if ar_order is None or (isinstance(ar_order, float) and np.isnan(ar_order)) else str(int(ar_order))
     cutoff_txt = cutoff.strftime("%Y-%m")
 
-    # Título / subtítulo
     fig.update_layout(
         template="simple_white",
         height=560,
         hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=0.99),
-        margin=dict(t=95),
         title=dict(
-            text=(
-                f"<span style='font-size:22px'><b>{var_label} mensual ({y0}–{y1})</b></span>"
-                f"<br><span style='font-size:18px'><b>Estación {station_label}</b></span>"
-                f"<br><span style='font-size:12px'>Evaluación de los últimos {holdout_eff} meses (desde {cutoff_txt}) · AR(residuos)={ar_txt}</span>"
-            ),
-            x=0.02,
+            text=f"{var_label} mensual · {station_label} · {depth_m} m",
+            font=dict(family="Plus Jakarta Sans, sans-serif", size=13, color="#A8BBCF"),
+            x=0.0,
+            xanchor="left",
+            pad=dict(l=6, t=4),
         ),
-        xaxis=dict(title="Fecha"),
-        yaxis=dict(title=f"{var_label} ({var_units})"),
+        # Leyenda horizontal debajo de la gráfica — evita solapamiento con el título
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.18,
+            xanchor="left",
+            x=0.0,
+            font=dict(size=11),
+        ),
+        margin=dict(t=44, b=110),
+        xaxis=dict(title=""),
+        yaxis=dict(title=f"{var_units}"),
     )
 
-    footer_md = "\n".join(
-        [
-            "**Qué estás viendo**",
-            "- Los puntos muestran la **temperatura mensual a 5 m** en la estación.",
-            "- En cada mes hay **dato o no hay dato**. Si falta, no se dibuja punto.",
-            "- Cuando hay dato, **T(5 m)** se obtiene dentro del perfil vertical (CTD) estimando el valor a 5 m a partir del propio perfil. Si el perfil no cubre 5 m, ese mes queda vacío.",
-            "",
-            "**Modelo base (línea azul discontinua)**",
-            "A partir del histórico se ajusta un modelo simple que captura dos señales:",
-            "- Un **ciclo estacional** (invierno más frío, verano más cálido).",
-            "- Una **tendencia lenta** a largo plazo (p. ej., calentamiento/enfriamiento).",
-            "",
-            "Ecuación (mensual):",
-            "$$T_t = \\alpha + \\beta\\,t + \\gamma_{mes(t)} + \\varepsilon_t$$",
-            "- $T_t$: temperatura observada del mes $t$.",
-            "- $t$: índice temporal (meses).",
-            "- $\\alpha$: nivel medio.",
-            "- $\\beta$: pendiente (aprox. °C/año).",
-            "- $\\gamma_{mes(t)}$: “efecto del mes” (patrón típico de enero, febrero, etc.).",
-            "- $\\varepsilon_t$: residuo = lo que queda sin explicar (el “extra” de ese mes).",
-            "",
-            "**Banda azul (95%)**",
-            "- Es un **rango de variación normal** alrededor del modelo según el histórico.",
-            "- Se interpreta como: “aunque el patrón se mantenga, los meses reales suelen oscilar un poco por encima o por debajo”.",
-            "",
-            f"**Evaluación del último tramo (rojo) – holdout de {holdout_eff} meses (desde {cutoff_txt})**",
-            "- Esos meses se dejan aparte para evaluar el final de la serie: **no se usan para ajustar** el modelo base.",
-            "- ATAC trabaja con los **residuos** $\\varepsilon_t$ (el “extra” respecto a la línea azul) y aprende si hay **inercia/racha** de un mes a otro.",
-            f"- La etiqueta **AR(residuos)={ar_txt}** resume cuánta memoria detecta el modelo en los residuos (p=0,1,2; se elige por AIC: equilibrio entre ajustar bien y no complicarse).",
-            "",
-            "**Bandas rojas 50/75/95%**",
-            "- Son niveles de tolerancia del pronóstico: 50% (estrecho), 75% (intermedio), 95% (conservador).",
-            "",
-            "**Interpretación (tramo rojo vs bandas)**",
-            "- Si varios puntos del tramo rojo caen fuera de la banda roja 95%, ese periodo es **poco esperable** comparado con el comportamiento histórico (posible cambio reciente).",
-        ]
+    # Pie de figura — 5 preguntas Q&A para el grid del visor.
+    # Formato: pares "Q|||A" separados por "\n\n---\n\n"
+    gap_answer = (
+        f"{gap_summary} La línea del modelo continúa sin interrupción porque el ciclo "
+        "estacional es un parámetro matemático, no requiere datos recientes."
+        if gap_summary
+        else "No hay huecos significativos (≥ 3 meses) en la serie."
     )
+
+    footer_md = "\n\n---\n\n".join([
+        f"¿Por qué la línea serpentea?|||"
+        f"La curva discontinua incorpora un <b>ciclo estacional mensual</b> ajustado sobre el histórico: "
+        f"sube en verano y baja en invierno. Antes, con datos de varias radiales mezcladas, ese patrón quedaba "
+        f"enmascarado por la dispersión.",
+
+        f"¿Qué es la banda azul?|||"
+        f"Muestra el <b>rango de variación habitual</b> del modelo (intervalo 95%). "
+        f"Banda estrecha = serie homogénea a lo largo de los años. "
+        f"Banda ancha = mayor dispersión, posible mezcla de condiciones o cambio en el sistema.",
+
+        f"¿Qué es el tramo rojo?|||"
+        f"Los últimos <b>{holdout_eff} meses</b> (desde {cutoff_txt}) se excluyen del ajuste para "
+        f"comprobar cómo responde el modelo en datos que no ha visto. "
+        f"Si los puntos caen dentro de la banda 95%, el comportamiento reciente es coherente con el histórico.",
+
+        f"¿Por qué hay períodos sin puntos?|||"
+        f"{gap_answer}",
+
+        f"¿Puedo usar estos valores en un informe?|||"
+        f"Este visor es una herramienta de exploración. Los resultados deben contrastarse con "
+        f"el <b>informe científico firmado</b> y la auditoría del instrumental de campaña antes "
+        f"de su uso en documentos oficiales.",
+    ])
 
     meta = {**meta_m, **meta_a}
-    return AtacMonthlyResult(fig=fig, footer_md=footer_md, pipe=pipe, meta=meta)
+    return AtacMonthlyResult(fig=fig, footer_md=footer_md, pipe=pipe, meta=meta, gap_summary=gap_summary)
 

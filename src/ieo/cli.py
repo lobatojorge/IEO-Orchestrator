@@ -10,6 +10,7 @@ from ieo.io.excel_reader import ExcelReader
 from ieo.io.netcdf_reader import NetCDFReader
 from ieo.cudillero_paths import default_radial_csv_path
 from ieo.io.radial_csv_reader import RadialCsvReader
+from ieo.radiales_catalog import RADIAL_ID_CUDILLERO
 from ieo.observability.anomaly import IsolationForestConfig, detect_anomalies_isolation_forest
 from ieo.observability.quality_summary import build_health_summary
 from ieo.reports.html_report import StepReport, write_step_report
@@ -85,6 +86,26 @@ def run_pipeline(*, project_root: Path) -> int:
                 config=config,
                 run_id=run_id.value,
             )
+            # Filtro de radial: solo Cudillero (E1CU, E2CU, E3CU)
+            radial_filter_lines: list[str] = []
+            if "radial_id" in lf.collect_schema().names():
+                import polars as _pl  # noqa: PLC0415
+                n_total = lf.select(_pl.len()).collect().item()
+                lf = lf.filter(_pl.col("radial_id") == RADIAL_ID_CUDILLERO)
+                n_kept = lf.select(_pl.len()).collect().item()
+                n_dropped = n_total - n_kept
+                radial_filter_lines = [
+                    f"Filtro radial '{RADIAL_ID_CUDILLERO}': {n_kept:,} filas conservadas, "
+                    f"{n_dropped:,} descartadas (otras radiales).",
+                ]
+                if n_kept == 0:
+                    raise ValueError(
+                        f"Tras filtrar a radial '{RADIAL_ID_CUDILLERO}' no quedan filas. "
+                        "Comprueba que el CSV contiene datos con acrónimos E1CU/E2CU/E3CU."
+                    )
+            else:
+                radial_filter_lines = ["Columna 'radial_id' no presente; filtro de radial omitido."]
+
             out_parquet = run_paths.data_dir / f"{src.stem}.ctd_canonical.parquet"
             write_parquet(lf, out_parquet)
             canonical_paths.append(out_parquet)
@@ -95,6 +116,7 @@ def run_pipeline(*, project_root: Path) -> int:
                 summary_lines=[
                     f"Fuente detectada: {src.name}",
                     "Se normalizó a una tabla estable (staging) y se escribió Parquet canónico.",
+                    *radial_filter_lines,
                     *notes,
                 ],
                 metrics={"source": src.name, "canonical_parquet": str(out_parquet), **dataset_metrics(lf)},
