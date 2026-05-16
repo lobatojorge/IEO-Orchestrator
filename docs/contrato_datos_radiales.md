@@ -6,7 +6,7 @@ Este documento describe las reglas que implementa `src/ieo/validation/radial_con
 
 | Entrada | Momento |
 |---------|---------|
-| CSV en **Streamlit** (`run/app.py`) | Tras construir la serie mensual interpolada a la profundidad objetivo y **antes** de Marcos+ATAC. Si hay violaciones **ERROR**, el gráfico **no se muestra** salvo checkbox explícito de diagnóstico. |
+| Parquet **limpio** (`*.ctd_clean.parquet`) en **Streamlit** (`run/app.py`) | Tras cargar la corrida y **antes** de Marcos+ATAC (misma lógica que 01b para T en perfil). Si hay violaciones **ERROR**, el gráfico **no se muestra** salvo checkbox explícito de diagnóstico. |
 | Parquet **canónico** (`*.ctd_canonical.parquet`) | Paso **01b** del pipeline (`run/main.py`): informe en `outputs/runs/<run>/checkpoints/` y mensaje en stderr si hay errores. |
 
 ## Umbrales por defecto (`RadialContractThresholds`)
@@ -17,7 +17,7 @@ Ajustables en código según región / producto.
 
 - **Temperatura**: valores en \([-2, 32]\) °C (Cantábrico superficial / orden de magnitud).
 - **Salinidad**: \([0, 42]\) PSU.
-- **Saltos verticales** entre niveles adyacentes ordenados por profundidad (Δz ≤ 15 m): aviso/error si |ΔT| supera 4 / 8 °C.
+- **Saltos verticales** entre niveles adyacentes ordenados por profundidad (tras partir por segmentos monótonos de `z`): se ignoran pares con **Δz** por debajo de `temp_adjacent_min_dz_m` (ruido casi coplanar). Luego dos bandas: **Δz** hasta ~5 m y **Δz** hasta 15 m, cada una con aviso/error propios (`temp_adjacent_delta_warn_band_*`, `temp_adjacent_delta_error_band_*` en `RadialContractThresholds`).
 
 ### Serie mensual agregada
 

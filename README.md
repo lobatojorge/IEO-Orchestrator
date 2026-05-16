@@ -145,7 +145,7 @@ Python 3.11+, Polars (pipeline), Pandas + Plotly (visor Streamlit), scikit-learn
 
 ## Coherencia pipeline ↔ visor
 
-- **Temperatura (perfil):** el visor usa la misma función que el paso 01b del pipeline: `validate_canonical_ctd_polars` sobre el Parquet limpio (vía Polars), no una regla paralela.
+- **Temperatura (perfil):** el visor usa la misma función que el paso 01b del pipeline: `validate_canonical_ctd_polars` sobre el Parquet limpio (vía Polars). El gradiente vertical usa **dos bandas de Δz** (p. ej. 2,5–5 m vs 5–15 m) con umbrales distintos para no marcar ERROR por glitches casi coplanares ni ignorar termoclinas agudas en varios metros.
 - **Salinidad (perfil):** el contrato canónico actual solo formaliza temperatura en ese wrapper; la salinidad sigue validándose con `validate_profile_dataframe` en el visor (misma familia de reglas que el perfil de T).
 - **Serie mensual / ATAC:** se valida la serie agregada (`validate_monthly_radial_series`). Marcos+ATAC consume la media mensual interpolada a la profundidad objetivo; **no** inyecta puntuaciones ni explicaciones del `audit_log` de Isolation Forest (coste de ingeniería > beneficio para este alcance; ver `docs/operacion_tfm.md`).
 - **Ejecutar pipeline desde el visor:** barra lateral → «Ejecutar pipeline ahora» (subproceso local, sin coste de servicio; puede tardar según tamaño del CSV).

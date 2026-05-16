@@ -12,8 +12,9 @@ run/__pycache__/
 .Python
 references/
 
-# Streamlit cache local
-.streamlit/
+# Streamlit — ignorar caché local pero versionar config de tema
+.streamlit/*
+!.streamlit/config.toml
 
 # ─────────────────────────────────────────────
 # Datos reales IEO y artefactos derivados
@@ -54,6 +55,22 @@ informe_auditoria_ICES_files/
 
 # Auditoría externa (proyecto independiente)
 auditoria_advicExplorer/
+
+# ─────────────────────────────────────────────
+# Patrones adicionales
+# ─────────────────────────────────────────────
+# Archivos temporales LaTeX / Word
+*.tmp
+~$*
+*.bak
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Coverage y test artifacts
+.coverage
+htmlcov/
+.pytest_cache/
 
 # ─────────────────────────────────────────────
 # Editores y SO
